@@ -19,12 +19,9 @@ Plantower_PMS7003 pms7003 = Plantower_PMS7003();
 #define POOLTEMP_PIN 32
 
 
-Average<float> pm1Avg(30);
-Average<float> pm25Avg(30);
-Average<float> pm10Avg(30);
-Average<float> pm1aAvg(30);
-Average<float> pm25aAvg(30);
-Average<float> pm10aAvg(30);
+Average<float> pm1Avg(6);
+Average<float> pm25Avg(6);
+Average<float> pm10Avg(6);
 Average<float> wifiAvg(30);
 
 OneWire oneWire(POOLTEMP_PIN);
@@ -267,50 +264,18 @@ void printLocalTime()
 
 void readPMS(void){
      if (pms7003.hasNewData()) {
-        new1p0 = pms7003.getPM_1_0();
-        new2p5 = pms7003.getPM_2_5();
-        new10 = pms7003.getPM_10_0();
-                if (firstvalue == 0)  //do not do this on the first run
-        {
-            if (new1p0 > 200) {new1p0 = old1p0;} //check for data spikes in particle counter, ignore data that is >200
-            if (new2p5 > 200) {new2p5 = old2p5;} //data spikes ruin pretty graph
-            if (new10 > 200) {new10 = old10;}
-            if (new1p0 - old1p0 > 50) {new1p0 = old1p0;} //also ignore data that is >50 off from last data
-            if (new2p5 - old2p5 > 50) {new2p5 = old2p5;}
-            if (new10 - old10 > 50) {new10 = old10;}
-        }
-        pm1Avg.push(new1p0);
-        pm25Avg.push(new2p5);
-        pm10Avg.push(new10);
-        old1p0 = new1p0; //reset data spike check variable
-        old2p5 = new2p5;
-        old10 = new10;
 
-        new1p0a = pms7003.getPM_1_0_atmos(); 
-        new2p5a = pms7003.getPM_2_5_atmos();
-        new10a = pms7003.getPM_10_0_atmos();
-                if (firstvalue == 0)  //do not do this on the first run
-        {
-            if (new1p0a > 200) {new1p0a = old1p0a;} //check for data spikes in particle counter, ignore data that is >200
-            if (new2p5a > 200) {new2p5a = old2p5a;} //data spikes ruin pretty graph
-            if (new10a > 200) {new10a = old10a;}
-            if (new1p0a - old1p0a > 50) {new1p0a = old1p0a;} //also ignore data that is >50 off from last data
-            if (new2p5a - old2p5a > 50) {new2p5a = old2p5a;}
-            if (new10a - old10a > 50) {new10a = old10a;}
-        }
-        pm1aAvg.push(new1p0a);
-        pm25aAvg.push(new2p5a);
-        pm10aAvg.push(new10a);
-        old1p0a = new1p0a; //reset data spike check variable
-        old2p5a = new2p5a;
-        old10a = new10a;        
+        pm1Avg.push(pms7003.getPM_1_0());
+        pm25Avg.push(pms7003.getPM_2_5());
+        pm10Avg.push(pms7003.getPM_10_0());
+  
        up3 = pms7003.getRawGreaterThan_0_3();
        up5 = pms7003.getRawGreaterThan_0_5();
        up10 = pms7003.getRawGreaterThan_1_0();
        up25 = pms7003.getRawGreaterThan_2_5();
        up50 = pms7003.getRawGreaterThan_5_0();
        up100 = pms7003.getRawGreaterThan_10_0();
-    firstvalue = 0;
+
   }
 }
 
@@ -365,7 +330,7 @@ void setup() {
     mins = timeinfo.tm_min;
     secs = timeinfo.tm_sec;
     terminal.println("********************************");
-    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.1");
+    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.3");
     terminal.print("Connected to: ");
     terminal.println(WiFi.SSID());
     terminal.print("IP address:");
@@ -390,24 +355,18 @@ void loop() {
     {
         wifiAvg.push(WiFi.RSSI());
         millisAvg = millis();
-        FastLED.setBrightness(sliderValue);
-        FastLED.show();
-    }
 
-    if  (millis() - millisBlynk >= 30000)  //if it's been 30 seconds 
-    {
-        millisBlynk = millis();
-        pmG = 55 - bridgedata;
+        pmG = 55 - pm25Avg.mean();
         if (pmG < 0) {pmG = 0;}
         pmG *= (255.0/55.0);
         if (pmG > 255) {pmG = 255;}
         
-        pmR = bridgedata;
+        pmR = pm25Avg.mean();
         if (pmR < 0) {pmR = 0;}
         pmR *= (255.0/55.0);
         if (pmR > 255) {pmR = 255;}
         
-        pmB = bridgedata - 100;
+        pmB = pm25Avg.mean() - 100;
         if (pmB < 0) {pmB = 0;}
         pmB *= (255.0/55.0);
         if (pmB > 255) {pmB = 255;}
@@ -426,8 +385,15 @@ void loop() {
         {
         leds[0] = CRGB(zebraR, zebraG, zebraB);
         }
-        
+        FastLED.setBrightness(sliderValue);
         FastLED.show();
+    }
+
+    if  (millis() - millisBlynk >= 30000)  //if it's been 30 seconds 
+    {
+        millisBlynk = millis();
+
+        
 
         tempBME = sht31.readTemperature();
         humBME = sht31.readHumidity();
@@ -461,9 +427,9 @@ void loop() {
         Blynk.virtualWrite(V14, up25);
         Blynk.virtualWrite(V15, up50);
         Blynk.virtualWrite(V16, up100);
-        Blynk.virtualWrite(V22, pm1aAvg.mean());
-        Blynk.virtualWrite(V23, pm25aAvg.mean());
-        Blynk.virtualWrite(V24, pm10aAvg.mean());
+        //Blynk.virtualWrite(V22, pm1aAvg.mean());
+        //Blynk.virtualWrite(V23, pm25aAvg.mean());
+        //Blynk.virtualWrite(V24, pm10aAvg.mean());
         Blynk.virtualWrite(V31, wifiAvg.mean());
         if ((windbridgedata == 0) && (winddir == 0)) {}
          else {
