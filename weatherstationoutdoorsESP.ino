@@ -19,9 +19,9 @@ Plantower_PMS7003 pms7003 = Plantower_PMS7003();
 #define POOLTEMP_PIN 32
 
 
-Average<float> pm1Avg(6);
-Average<float> pm25Avg(6);
-Average<float> pm10Avg(6);
+Average<float> pm1Avg(12);
+Average<float> pm25Avg(12);
+Average<float> pm10Avg(12);
 Average<float> wifiAvg(30);
 
 OneWire oneWire(POOLTEMP_PIN);
@@ -32,7 +32,7 @@ NonBlockingDallas sensorDs18b20(&dallasTemp); //start up the DS18 temp probes
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 
-
+bool heater = false;
 
 
 #define NUM_LEDS 1
@@ -44,8 +44,8 @@ const int daylightOffset_sec = 0;   //Replace with your daylight offset (secs)
 int hours, mins, secs;
 
 char auth[] = "X_pnRUFOab29d3aNrScsKq1dryQYdTw7"; //auth token for Blynk - this is a LOCAL token, can't be used without LAN access
-char remoteAuth[] = "eT_7FL7IUpqonthsAr-58uTK_-su_GYy";
-char remoteAuth2[] = "8_-CN2rm4ki9P3i_NkPhxIbCiKd5RXhK";
+char remoteAuth[] = "pO--Yj8ksH2fjJLMW6yW9trkHBhd9-wc";  //costello auth
+char remoteAuth2[] = "8_-CN2rm4ki9P3i_NkPhxIbCiKd5RXhK"; //hubert clock auth
 
 const char* ssid = "mikesnet";
 const char* password = "springchicken";
@@ -103,6 +103,7 @@ BLYNK_WRITE(V19)
     terminal.println("temps");
     terminal.println("wets");
     terminal.println("particles");
+    terminal.println("heater");
      terminal.println("==End of list.==");
     }
         if (String("wifi") == param.asStr()) 
@@ -161,11 +162,13 @@ BLYNK_WRITE(V19)
                       pms7003.getRawGreaterThan_5_0(),
                       pms7003.getRawGreaterThan_10_0());
         terminal.print(output);
-      
-
-    
     }
-
+    if (String("heater") == param.asStr()) {
+        heater = !heater;
+        sht31.heater(heater);
+      terminal.print("> Heater is now: ");
+      terminal.print(heater);
+    }
     terminal.flush();
 
 }
@@ -264,7 +267,7 @@ void printLocalTime()
 
 void readPMS(void){
      if (pms7003.hasNewData()) {
-
+        new2p5 = pms7003.getPM_2_5();
         pm1Avg.push(pms7003.getPM_1_0());
         pm25Avg.push(pms7003.getPM_2_5());
         pm10Avg.push(pms7003.getPM_10_0());
@@ -330,7 +333,7 @@ void setup() {
     mins = timeinfo.tm_min;
     secs = timeinfo.tm_sec;
     terminal.println("********************************");
-    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.3");
+    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.4");
     terminal.print("Connected to: ");
     terminal.println(WiFi.SSID());
     terminal.print("IP address:");
@@ -338,6 +341,7 @@ void setup() {
     terminal.print("Signal strength: ");
     terminal.println(WiFi.RSSI());
     printLocalTime();
+    terminal.flush();
 }
 
 BLYNK_CONNECTED() {
@@ -351,22 +355,22 @@ void loop() {
       pms7003.updateFrame();
     readPMS();
     if (WiFi.status() == WL_CONNECTED) {Blynk.run();}  // put your main code here, to run repeatedly:
-    if  (millis() - millisAvg >= 1000)  //if it's been 1 second
+    if  (millis() - millisAvg >= 2000)  //if it's been 1 second
     {
         wifiAvg.push(WiFi.RSSI());
         millisAvg = millis();
 
-        pmG = 55 - pm25Avg.mean();
+        pmG = 55 - new2p5;
         if (pmG < 0) {pmG = 0;}
         pmG *= (255.0/55.0);
         if (pmG > 255) {pmG = 255;}
         
-        pmR = pm25Avg.mean();
+        pmR = new2p5;
         if (pmR < 0) {pmR = 0;}
         pmR *= (255.0/55.0);
         if (pmR > 255) {pmR = 255;}
         
-        pmB = pm25Avg.mean() - 100;
+        pmB = new2p5 - 100;
         if (pmB < 0) {pmB = 0;}
         pmB *= (255.0/55.0);
         if (pmB > 255) {pmB = 255;}
@@ -409,8 +413,8 @@ void loop() {
           Blynk.virtualWrite(V3, humBME);
           Blynk.virtualWrite(V4, abshumBME);
           Blynk.virtualWrite(V17, humidex);
-          bridge1.virtualWrite(V62, tempBME);
-          bridge1.virtualWrite(V63, abshumBME);
+          bridge1.virtualWrite(V73, tempBME);
+          //bridge1.virtualWrite(V63, abshumBME);
           bridge2.virtualWrite(V62, tempBME);
           bridge2.virtualWrite(V63, abshumBME);
           bridge2.virtualWrite(V64, windchill);
