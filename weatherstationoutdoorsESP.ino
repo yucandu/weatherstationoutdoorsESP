@@ -6,18 +6,25 @@
 #include <BlynkSimpleEsp32.h>
 #include "time.h"
 #include <FastLED.h>
-#include "Adafruit_SHT31.h"
+#include "Adafruit_SHT4x.h"
 #include <Average.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <NonBlockingDallas.h>     
 #include "Plantower_PMS7003.h"
+#include <AP3216_WE.h>
+
+AP3216_WE myAP3216 = AP3216_WE();
+
 char output[256];
 Plantower_PMS7003 pms7003 = Plantower_PMS7003();
 
 #define LED_PIN 15  //d2
-#define POOLTEMP_PIN 32
+#define POOLTEMP_PIN 25
 
+  float als; 
+  unsigned int prox;
+  unsigned int ir;
 
 Average<float> pm1Avg(12);
 Average<float> pm25Avg(12);
@@ -27,9 +34,10 @@ Average<float> wifiAvg(30);
 OneWire oneWire(POOLTEMP_PIN);
 DallasTemperature dallasTemp(&oneWire);
 NonBlockingDallas sensorDs18b20(&dallasTemp); //start up the DS18 temp probes
-#define TIME_INTERVAL 15000 //for DS18 probe
+#define TIME_INTERVAL 4000 //for DS18 probe
 
-Adafruit_SHT31 sht31 = Adafruit_SHT31();
+Adafruit_SHT4x sht4 = Adafruit_SHT4x();
+  sensors_event_t humidity, temp;
 
 
 bool heater = false;
@@ -67,6 +75,7 @@ unsigned long rgbmillis = 0;
 int zebraR, zebraG, zebraB;
 int sliderValue = 128;
 int menuValue = 2;
+int luxrange = 1;
 float  pmR, pmG, pmB;
 bool rgbON = true;
 
@@ -117,6 +126,9 @@ BLYNK_WRITE(V19)
     }
 
     if (String("temps") == param.asStr()) {
+                sht4.getEvent(&humidity, &temp);
+          tempBME = temp.temperature;
+          humBME = humidity.relative_humidity;
         terminal.print("> tempBME[v0],tempPool[v5],humidex[v17],dewpoint[v2]: ");
         terminal.print(tempBME);
         terminal.print(",");
@@ -125,6 +137,17 @@ BLYNK_WRITE(V19)
         terminal.print(humidex);
         terminal.print(",");
         terminal.println(dewpoint);
+        als = myAP3216.getAmbientLight();
+        prox = myAP3216.getProximity();
+        ir = myAP3216.getIRData(); // Ambient IR light
+        setluxrange(); //RANGE_20661 (default), RANGE_  RANGE_5162, RANGE_1291, RANGE_323
+        myAP3216.setMode(AP3216_ALS_PS_ONCE);
+        terminal.print(">als, prox, ir: ");
+        terminal.print(als);
+        terminal.print(",");
+        terminal.print(prox);
+        terminal.print(",");
+        terminal.println(ir);       
     }
     if (String("wets") == param.asStr()) {
         terminal.print("> humBME[v3],abshumBME[v4]: ");
@@ -165,7 +188,6 @@ BLYNK_WRITE(V19)
     }
     if (String("heater") == param.asStr()) {
         heater = !heater;
-        sht31.heater(heater);
       terminal.print("> Heater is now: ");
       terminal.print(heater);
     }
@@ -282,15 +304,49 @@ void readPMS(void){
   }
 }
 
+void setluxrange(){
+  if (luxrange == 4){
+    if (als < 5160) {luxrange--;}
+  }
+
+  if (luxrange == 3){
+    if (als > 5160) {luxrange++;}
+    if (als < 1289) {luxrange--;}
+  }
+
+  if (luxrange == 2){
+    if (als > 1289) {luxrange++;}
+    if (als < 321) {luxrange--;}
+  }
+
+  if (luxrange == 1){
+    if (als > 321) {luxrange++;}
+  }
+
+  if (als < 2) {luxrange = 1;}
+
+  if (luxrange == 4) {myAP3216.setLuxRange(RANGE_20661);} //RANGE_20661 (default), RANGE_  RANGE_5162, RANGE_1291, RANGE_323
+  if (luxrange == 3) {myAP3216.setLuxRange(RANGE_5162);}
+  if (luxrange == 2) {myAP3216.setLuxRange(RANGE_1291);}
+  if (luxrange == 1) {myAP3216.setLuxRange(RANGE_323);}
+}
+
 void setup() {
   pinMode(POOLTEMP_PIN, INPUT_PULLUP);
   Serial.begin(9600);
   Serial1.begin(9600, SERIAL_8N1, 3, 1);
+  myAP3216.init();
+  myAP3216.setLuxRange(RANGE_323); //myAP3216.setLuxRange(RANGE_20661);
+  myAP3216.setPSIntegrationTime(1);
+  myAP3216.setMode(AP3216_ALS_PS_ONCE);
+
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   Serial.println("");
-  sht31.begin(0x44);
+sht4.begin();
+  sht4.setPrecision(SHT4X_HIGH_PRECISION);
+  sht4.setHeater(SHT4X_NO_HEATER);
   pms7003.init(&Serial1);
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
@@ -323,8 +379,9 @@ void setup() {
     Blynk.connect();
   sensorDs18b20.begin(NonBlockingDallas::resolution_12, NonBlockingDallas::unit_C, TIME_INTERVAL);
   sensorDs18b20.onTemperatureChange(handleTemperatureChange);
-  tempBME = sht31.readTemperature();
-   humBME = sht31.readHumidity();
+          sht4.getEvent(&humidity, &temp);
+          tempBME = temp.temperature;
+          humBME = humidity.relative_humidity;
        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     delay(250);
     struct tm timeinfo;
@@ -396,11 +453,16 @@ void loop() {
     if  (millis() - millisBlynk >= 30000)  //if it's been 30 seconds 
     {
         millisBlynk = millis();
-
+        als = myAP3216.getAmbientLight();
+        prox = myAP3216.getProximity();
+        ir = myAP3216.getIRData(); // Ambient IR light
+        setluxrange();
+        myAP3216.setMode(AP3216_ALS_PS_ONCE);
         
 
-        tempBME = sht31.readTemperature();
-        humBME = sht31.readHumidity();
+          sht4.getEvent(&humidity, &temp);
+          tempBME = temp.temperature;
+          humBME = humidity.relative_humidity;
         abshumBME = (6.112 * pow(2.71828, ((17.67 * tempBME)/(tempBME + 243.5))) * humBME * 2.1674)/(273.15 + tempBME); //calculate absolute humidity
         dewpoint = tempBME - ((100 - humBME)/5); //calculate dewpoint
         humidex = tempBME + 0.5555 * (6.11 * pow(2.71828, 5417.7530*( (1/273.16) - (1/(273.15 + dewpoint)) ) ) - 10); //calculate humidex using Environment Canada formula
@@ -442,5 +504,9 @@ void loop() {
         }
         if (bridgedata > 0) {Blynk.virtualWrite(V53, bridgedata);
         bridge1.virtualWrite(V61, bridgedata);}
+        Blynk.virtualWrite(V35, als);
+        Blynk.virtualWrite(V36, prox);
+        Blynk.virtualWrite(V37, ir);  
+        Blynk.virtualWrite(V38, luxrange);
     }
 }
