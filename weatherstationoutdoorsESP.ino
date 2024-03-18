@@ -20,7 +20,7 @@ char output[256];
 Plantower_PMS7003 pms7003 = Plantower_PMS7003();
 
 #define LED_PIN 15  //d2
-#define POOLTEMP_PIN 25
+#define POOLTEMP_PIN 32
 
   float als; 
   unsigned int prox;
@@ -54,6 +54,8 @@ int hours, mins, secs;
 char auth[] = "X_pnRUFOab29d3aNrScsKq1dryQYdTw7"; //auth token for Blynk - this is a LOCAL token, can't be used without LAN access
 char remoteAuth[] = "pO--Yj8ksH2fjJLMW6yW9trkHBhd9-wc";  //costello auth
 char remoteAuth2[] = "8_-CN2rm4ki9P3i_NkPhxIbCiKd5RXhK"; //hubert clock auth
+char remoteAuth3[] = "qS5PQ8pvrbYzXdiA4I6uLEWYfeQrOcM4"; //indiana clock auth
+
 
 const char* ssid = "mikesnet";
 const char* password = "springchicken";
@@ -197,13 +199,20 @@ BLYNK_WRITE(V19)
 
 BLYNK_WRITE(V51){
     float pinData = param.asFloat();
-    bridgedata = pinData;
+    bridgedata = pinData; //bridgedata is pm25data
 }
 
 BLYNK_WRITE(V56){
     float pinData = param.asFloat();
     windbridgedata = pinData;
     windmps = windbridgedata / 3.6;
+}
+
+float windgust;
+
+BLYNK_WRITE(V57){
+    float pinData = param.asFloat();
+windgust = pinData;
 }
 
 BLYNK_WRITE(V58){
@@ -404,6 +413,7 @@ sht4.begin();
 BLYNK_CONNECTED() {
   bridge1.setAuthToken (remoteAuth);
   bridge2.setAuthToken (remoteAuth2);
+  bridge3.setAuthToken (remoteAuth3);
 }
 
 
@@ -481,6 +491,14 @@ void loop() {
           bridge2.virtualWrite(V63, abshumBME);
           bridge2.virtualWrite(V64, windchill);
           bridge2.virtualWrite(V65, humidex);
+          bridge3.virtualWrite(V62, tempBME);
+          bridge3.virtualWrite(V63, abshumBME);
+          bridge3.virtualWrite(V64, windchill);
+          bridge3.virtualWrite(V65, humidex);
+          bridge3.virtualWrite(V66, windgust);
+          bridge3.virtualWrite(V67, bridgedata);
+          bridge3.virtualWrite(V68, windbridgedata);
+          bridge3.virtualWrite(V69, winddir); 
         }
         if (tempPool > 0) {Blynk.virtualWrite(V5, tempPool);}
         Blynk.virtualWrite(V6, tempBME);
