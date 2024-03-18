@@ -86,6 +86,7 @@ AsyncWebServer server(80);
 WidgetTerminal terminal(V19); //terminal widget
 WidgetBridge bridge1(V60);
 WidgetBridge bridge2(V70);
+WidgetBridge bridge3(V80);
 
 
 BLYNK_WRITE(V21)
