@@ -116,6 +116,7 @@ BLYNK_WRITE(V19)
     terminal.println("wets");
     terminal.println("particles");
     terminal.println("heater");
+    terminal.println("reset");
      terminal.println("==End of list.==");
     }
         if (String("wifi") == param.asStr()) 
@@ -194,6 +195,11 @@ BLYNK_WRITE(V19)
       terminal.print("> Heater is now: ");
       terminal.print(heater);
     }
+  if (String("reset") == param.asStr()) {
+    terminal.println("Restarting...");
+    terminal.flush();
+    ESP.restart();
+  }
     terminal.flush();
 
 }
@@ -400,7 +406,7 @@ sht4.begin();
     mins = timeinfo.tm_min;
     secs = timeinfo.tm_sec;
     terminal.println("********************************");
-    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.4");
+    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.6");
     terminal.print("Connected to: ");
     terminal.println(WiFi.SSID());
     terminal.print("IP address:");
@@ -492,8 +498,10 @@ void loop() {
           bridge2.virtualWrite(V63, abshumBME);
           bridge2.virtualWrite(V64, windchill);
           bridge2.virtualWrite(V65, humidex);
+          
+          bridge3.virtualWrite(V61, tempPool);
           bridge3.virtualWrite(V62, tempBME);
-          bridge3.virtualWrite(V63, abshumBME);
+          bridge3.virtualWrite(V63, dewpoint);
           bridge3.virtualWrite(V64, windchill);
           bridge3.virtualWrite(V65, humidex);
           bridge3.virtualWrite(V66, windgust);
