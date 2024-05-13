@@ -11,24 +11,32 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <NonBlockingDallas.h>     
-#include "Plantower_PMS7003.h"
+
 #include <AP3216_WE.h>
+#include <Adafruit_ADS1X15.h>
+
+#define LED_PIN 15  //d2
+#define NUM_LEDS 1
+CRGB leds[NUM_LEDS];
+
+Adafruit_ADS1115 ads;
+
+  int16_t adc0;
+  double volts0;
 
 AP3216_WE myAP3216 = AP3216_WE();
 
 char output[256];
-Plantower_PMS7003 pms7003 = Plantower_PMS7003();
 
-#define LED_PIN 15  //d2
+
+
 #define POOLTEMP_PIN 32
 
   float als; 
   unsigned int prox;
   unsigned int ir;
 
-Average<float> pm1Avg(12);
-Average<float> pm25Avg(12);
-Average<float> pm10Avg(12);
+
 Average<float> wifiAvg(30);
 
 OneWire oneWire(POOLTEMP_PIN);
@@ -43,8 +51,6 @@ Adafruit_SHT4x sht4 = Adafruit_SHT4x();
 bool heater = false;
 
 
-#define NUM_LEDS 1
-CRGB leds[NUM_LEDS];
 
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
@@ -55,6 +61,7 @@ char auth[] = "X_pnRUFOab29d3aNrScsKq1dryQYdTw7"; //auth token for Blynk - this 
 char remoteAuth[] = "pO--Yj8ksH2fjJLMW6yW9trkHBhd9-wc";  //costello auth
 char remoteAuth2[] = "8_-CN2rm4ki9P3i_NkPhxIbCiKd5RXhK"; //hubert clock auth
 char remoteAuth3[] = "qS5PQ8pvrbYzXdiA4I6uLEWYfeQrOcM4"; //indiana clock auth
+char remoteAuth4[] = "19oL8t8mImCdoUqYhfhk6DADL7540f8s"; //TDSMeter  auth
 
 
 const char* ssid = "mikesnet";
@@ -87,6 +94,7 @@ WidgetTerminal terminal(V19); //terminal widget
 WidgetBridge bridge1(V60);
 WidgetBridge bridge2(V70);
 WidgetBridge bridge3(V80);
+WidgetBridge bridge4(V90);
 
 
 BLYNK_WRITE(V21)
@@ -114,9 +122,9 @@ BLYNK_WRITE(V19)
     terminal.println("wifi");
     terminal.println("temps");
     terminal.println("wets");
-    terminal.println("particles");
     terminal.println("heater");
     terminal.println("reset");
+    terminal.println("tds");
      terminal.println("==End of list.==");
     }
         if (String("wifi") == param.asStr()) 
@@ -136,11 +144,7 @@ BLYNK_WRITE(V19)
         terminal.print("> tempBME[v0],tempPool[v5],humidex[v17],dewpoint[v2]: ");
         terminal.print(tempBME);
         terminal.print(",");
-        terminal.print(tempPool);
-        terminal.print(",");
-        terminal.print(humidex);
-        terminal.print(",");
-        terminal.println(dewpoint);
+        terminal.println(tempPool);
         als = myAP3216.getAmbientLight();
         prox = myAP3216.getProximity();
         ir = myAP3216.getIRData(); // Ambient IR light
@@ -160,36 +164,7 @@ BLYNK_WRITE(V19)
         terminal.print(abshumBME);
 
     }
-    if (String("particles") == param.asStr()) {
-     
 
-        sprintf(output, "\nSensor Version: %d    Error Code: %d\n",
-                      pms7003.getHWVersion(),
-                      pms7003.getErrorCode());
-        terminal.print(output);
-
-        sprintf(output, "    PM1.0 (ug/m3): %2d     [atmos: %d]\n",
-                      pms7003.getPM_1_0(),
-                      pms7003.getPM_1_0_atmos());              
-        terminal.print(output);
-        sprintf(output, "    PM2.5 (ug/m3): %2d     [atmos: %d]\n",
-                      pms7003.getPM_2_5(),
-                      pms7003.getPM_2_5_atmos());
-        terminal.print(output);
-        sprintf(output, "    PM10  (ug/m3): %2d     [atmos: %d]\n",
-                      pms7003.getPM_10_0(),
-                      pms7003.getPM_10_0_atmos());              
-        terminal.print(output);
-
-        sprintf(output, "\n    RAW: %2d[>0.3] %2d[>0.5] %2d[>1.0] %2d[>2.5] %2d[>5.0] %2d[>10]\n",
-                      pms7003.getRawGreaterThan_0_3(),
-                      pms7003.getRawGreaterThan_0_5(),
-                      pms7003.getRawGreaterThan_1_0(),
-                      pms7003.getRawGreaterThan_2_5(),
-                      pms7003.getRawGreaterThan_5_0(),
-                      pms7003.getRawGreaterThan_10_0());
-        terminal.print(output);
-    }
     if (String("heater") == param.asStr()) {
         heater = !heater;
       terminal.print("> Heater is now: ");
@@ -199,6 +174,11 @@ BLYNK_WRITE(V19)
     terminal.println("Restarting...");
     terminal.flush();
     ESP.restart();
+  }
+  if (String("tds") == param.asStr()) {
+    adc0 = ads.readADC_SingleEnded(0);
+    terminal.print("ADC0: ");
+    terminal.println(adc0);    
   }
     terminal.flush();
 
@@ -287,8 +267,8 @@ String windDirection(int temp_wind_deg)   //Source http://snowfence.umn.edu/Comp
   }
 }
 
-void handleTemperatureChange(float temperature, bool valid, int deviceIndex){
-  tempPool = temperature;
+void handleTemperatureChange(int deviceIndex, int32_t temperatureRAW){
+  tempPool = sensorDs18b20.rawToCelsius(temperatureRAW);
 }
 
 void printLocalTime()
@@ -303,22 +283,7 @@ void printLocalTime()
   terminal.flush();
 }
 
-void readPMS(void){
-     if (pms7003.hasNewData()) {
-        new2p5 = pms7003.getPM_2_5();
-        pm1Avg.push(pms7003.getPM_1_0());
-        pm25Avg.push(pms7003.getPM_2_5());
-        pm10Avg.push(pms7003.getPM_10_0());
-  
-       up3 = pms7003.getRawGreaterThan_0_3();
-       up5 = pms7003.getRawGreaterThan_0_5();
-       up10 = pms7003.getRawGreaterThan_1_0();
-       up25 = pms7003.getRawGreaterThan_2_5();
-       up50 = pms7003.getRawGreaterThan_5_0();
-       up100 = pms7003.getRawGreaterThan_10_0();
 
-  }
-}
 
 void setluxrange(){
   if (luxrange == 4){
@@ -348,9 +313,10 @@ void setluxrange(){
 }
 
 void setup() {
+  ads.begin();
+  ads.setGain(GAIN_TWO);
   pinMode(POOLTEMP_PIN, INPUT_PULLUP);
   Serial.begin(9600);
-  Serial1.begin(9600, SERIAL_8N1, 3, 1);
   myAP3216.init();
   myAP3216.setLuxRange(RANGE_323); //myAP3216.setLuxRange(RANGE_20661);
   myAP3216.setPSIntegrationTime(1);
@@ -363,7 +329,6 @@ void setup() {
 sht4.begin();
   sht4.setPrecision(SHT4X_HIGH_PRECISION);
   sht4.setHeater(SHT4X_NO_HEATER);
-  pms7003.init(&Serial1);
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
     leds[0] = CRGB(100, 100, 0);
@@ -393,7 +358,7 @@ sht4.begin();
   Serial.println("HTTP server started");
     Blynk.config(auth, IPAddress(192, 168, 50, 197), 8080);
     Blynk.connect();
-  sensorDs18b20.begin(NonBlockingDallas::resolution_12, NonBlockingDallas::unit_C, TIME_INTERVAL);
+  sensorDs18b20.begin(NonBlockingDallas::resolution_12, TIME_INTERVAL);
   sensorDs18b20.onTemperatureChange(handleTemperatureChange);
           sht4.getEvent(&humidity, &temp);
           tempBME = temp.temperature;
@@ -415,56 +380,26 @@ sht4.begin();
     terminal.println(WiFi.RSSI());
     printLocalTime();
     terminal.flush();
+        leds[0] = CRGB(0, 100, 0);
+        FastLED.show();
 }
 
 BLYNK_CONNECTED() {
   bridge1.setAuthToken (remoteAuth);
   bridge2.setAuthToken (remoteAuth2);
   bridge3.setAuthToken (remoteAuth3);
+  bridge4.setAuthToken (remoteAuth4);
 }
 
 
 void loop() {
   sensorDs18b20.update();
-      pms7003.updateFrame();
-    readPMS();
     if (WiFi.status() == WL_CONNECTED) {Blynk.run();}  // put your main code here, to run repeatedly:
     if  (millis() - millisAvg >= 2000)  //if it's been 1 second
     {
         wifiAvg.push(WiFi.RSSI());
         millisAvg = millis();
 
-        pmG = 55 - new2p5;
-        if (pmG < 0) {pmG = 0;}
-        pmG *= (255.0/55.0);
-        if (pmG > 255) {pmG = 255;}
-        
-        pmR = new2p5;
-        if (pmR < 0) {pmR = 0;}
-        pmR *= (255.0/55.0);
-        if (pmR > 255) {pmR = 255;}
-        
-        pmB = new2p5 - 100;
-        if (pmB < 0) {pmB = 0;}
-        pmB *= (255.0/55.0);
-        if (pmB > 255) {pmB = 255;}
-
-        if (menuValue == 1) 
-        {
-        leds[0] = CRGB(0, 0, 0);
-        }
-        
-        if (menuValue == 2) 
-        {
-        leds[0] = CRGB(pmR, pmG, pmB);
-        }
-
-        if (menuValue == 3) 
-        {
-        leds[0] = CRGB(zebraR, zebraG, zebraB);
-        }
-        FastLED.setBrightness(sliderValue);
-        FastLED.show();
     }
 
     if  (millis() - millisBlynk >= 30000)  //if it's been 30 seconds 
@@ -500,6 +435,7 @@ void loop() {
           bridge2.virtualWrite(V65, humidex);
           
           bridge3.virtualWrite(V61, tempPool);
+          bridge4.virtualWrite(V61, tempPool);
           bridge3.virtualWrite(V62, tempBME);
           bridge3.virtualWrite(V63, dewpoint);
           bridge3.virtualWrite(V64, windchill);
@@ -511,18 +447,7 @@ void loop() {
         }
         if (tempPool > 0) {Blynk.virtualWrite(V5, tempPool);}
         Blynk.virtualWrite(V6, tempBME);
-        Blynk.virtualWrite(V8, pm1Avg.mean());
-        Blynk.virtualWrite(V9, pm25Avg.mean());
-        Blynk.virtualWrite(V10, pm10Avg.mean());
-        Blynk.virtualWrite(V11, up3);
-        Blynk.virtualWrite(V12, up5);
-        Blynk.virtualWrite(V13, up10);
-        Blynk.virtualWrite(V14, up25);
-        Blynk.virtualWrite(V15, up50);
-        Blynk.virtualWrite(V16, up100);
-        //Blynk.virtualWrite(V22, pm1aAvg.mean());
-        //Blynk.virtualWrite(V23, pm25aAvg.mean());
-        //Blynk.virtualWrite(V24, pm10aAvg.mean());
+
         Blynk.virtualWrite(V31, wifiAvg.mean());
         if ((windbridgedata == 0) && (winddir == 0)) {}
          else {
@@ -535,5 +460,18 @@ void loop() {
         Blynk.virtualWrite(V36, prox);
         Blynk.virtualWrite(V37, ir);  
         Blynk.virtualWrite(V38, luxrange);
+        adc0 = ads.readADC_SingleEnded(0);
+        volts0 = ads.computeVolts(adc0);
+
+        float compensationCoefficient = 1.0+0.02*(tempPool-25.0);
+        float compensationVoltage = volts0/compensationCoefficient;
+              
+        //convert voltage value to tds value
+        float tdsValue = (133.42*compensationVoltage*compensationVoltage*compensationVoltage - 255.86*compensationVoltage*compensationVoltage + 857.39*compensationVoltage)*0.5;
+        float tdsuncompValue = (133.42*volts0*volts0*volts0 - 255.86*volts0*volts0 + 857.39*volts0)*0.5;
+        Blynk.virtualWrite(V41, adc0);
+        Blynk.virtualWrite(V42, volts0);
+        Blynk.virtualWrite(V43, tdsValue);
+        Blynk.virtualWrite(V44, tdsuncompValue);
     }
 }
