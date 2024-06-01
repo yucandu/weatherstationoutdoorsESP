@@ -436,6 +436,8 @@ void loop() {
           
           bridge3.virtualWrite(V61, tempPool);
           bridge4.virtualWrite(V61, tempPool);
+          bridge4.virtualWrite(V62, tempBME);
+          bridge4.virtualWrite(V63, humBME);
           bridge3.virtualWrite(V62, tempBME);
           bridge3.virtualWrite(V63, dewpoint);
           bridge3.virtualWrite(V64, windchill);
