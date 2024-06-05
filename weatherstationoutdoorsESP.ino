@@ -14,8 +14,23 @@
 
 #include <AP3216_WE.h>
 #include <Adafruit_ADS1X15.h>
+#include <GxEPD2_BW.h>
+#include <GxEPD2_3C.h>
+#include <Fonts/FreeSerif9pt7b.h>
+#include <Fonts/FreeSerif18pt7b.h> 
+
+GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(GxEPD2_213_Z98c(/*CS=D8*/ 2, /*DC=D3*/ 4, /*RST=D4*/ 18, /*BUSY=D2*/ 25)); // GDEW0213Z19 250x122
+
+const char pooltempchar[] = "Pool Temp:";
+const char airtempchar[] = "Air Temp:";
+
+#define HSPI_MISO 12
+#define HSPI_MOSI 13
+#define HSPI_SCLK 14
 
 #define LED_PIN 15  //d2
+#define POOLTEMP_PIN 32
+
 #define NUM_LEDS 1
 CRGB leds[NUM_LEDS];
 
@@ -30,7 +45,6 @@ char output[256];
 
 
 
-#define POOLTEMP_PIN 32
 
   float als; 
   unsigned int prox;
@@ -95,6 +109,10 @@ WidgetBridge bridge1(V60);
 WidgetBridge bridge2(V70);
 WidgetBridge bridge3(V80);
 WidgetBridge bridge4(V90);
+
+#define every(interval) \
+    static uint32_t __every__##interval = millis(); \
+    if (millis() - __every__##interval >= interval && (__every__##interval = millis()))
 
 
 BLYNK_WRITE(V21)
@@ -312,7 +330,47 @@ void setluxrange(){
   if (luxrange == 1) {myAP3216.setLuxRange(RANGE_323);}
 }
 
+
+void updateDisplay(){
+  display.setPartialWindow(0, 0, display.width(), display.height());
+  //display.setRotation(1);
+  display.setFont(&FreeSerif9pt7b);
+  display.setTextColor(GxEPD_BLACK); //GxEPD_RED
+  display.firstPage();
+  time_t rawtime;
+  struct tm* timeinfo;
+  time(&rawtime);
+  timeinfo = localtime(&rawtime);
+  
+  do
+  {
+    display.fillScreen(GxEPD_WHITE);
+    display.setFont(&FreeSerif9pt7b);
+    display.setTextColor(GxEPD_BLACK); //GxEPD_RED
+    display.setTextSize(1);
+    display.setCursor(0, 15);
+    display.print(pooltempchar);
+    display.setCursor(125, 15);
+    display.print(airtempchar);
+    display.setCursor(0, 100);
+    display.print(asctime(timeinfo));
+    display.setFont(&FreeSerif18pt7b);
+    display.setTextSize(2);
+    display.setCursor(125, 75);
+    display.print(tempBME,1);
+    display.setCursor(0, 75);
+    display.setTextColor(GxEPD_RED); //GxEPD_RED
+    display.print(tempPool,1);
+
+  }
+  while (display.nextPage());
+}
+
 void setup() {
+  tempPool = 42.42;
+  SPI.begin(HSPI_SCLK, HSPI_MISO, HSPI_MOSI);
+  display.init(115200,true,50,false);
+  display.setRotation(3);
   ads.begin();
   ads.setGain(GAIN_TWO);
   pinMode(POOLTEMP_PIN, INPUT_PULLUP);
@@ -382,6 +440,10 @@ sht4.begin();
     terminal.flush();
         leds[0] = CRGB(0, 100, 0);
         FastLED.show();
+        delay(1500);
+        sensorDs18b20.requestTemperature();
+        delay(1500);
+          updateDisplay();
 }
 
 BLYNK_CONNECTED() {
@@ -471,9 +533,16 @@ void loop() {
         //convert voltage value to tds value
         float tdsValue = (133.42*compensationVoltage*compensationVoltage*compensationVoltage - 255.86*compensationVoltage*compensationVoltage + 857.39*compensationVoltage)*0.5;
         float tdsuncompValue = (133.42*volts0*volts0*volts0 - 255.86*volts0*volts0 + 857.39*volts0)*0.5;
+        float newTDS = tdsuncompValue - (2.027 * tempBME);
         Blynk.virtualWrite(V41, adc0);
         Blynk.virtualWrite(V42, volts0);
         Blynk.virtualWrite(V43, tdsValue);
         Blynk.virtualWrite(V44, tdsuncompValue);
+        Blynk.virtualWrite(V45, newTDS);
     }
+
+  every(300000){
+    updateDisplay();
+  }
+
 }
