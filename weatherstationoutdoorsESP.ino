@@ -5,7 +5,7 @@
 #include <AsyncElegantOTA.h>
 #include <BlynkSimpleEsp32.h>
 #include "time.h"
-#include <FastLED.h>
+
 #include "Adafruit_SHT4x.h"
 #include <Average.h>
 #include <OneWire.h>
@@ -28,11 +28,9 @@ const char airtempchar[] = "Air Temp:";
 #define HSPI_MOSI 13
 #define HSPI_SCLK 14
 
-#define LED_PIN 15  //d2
 #define POOLTEMP_PIN 32
 
-#define NUM_LEDS 1
-CRGB leds[NUM_LEDS];
+
 
 Adafruit_ADS1115 ads;
 
@@ -56,7 +54,7 @@ Average<float> wifiAvg(30);
 OneWire oneWire(POOLTEMP_PIN);
 DallasTemperature dallasTemp(&oneWire);
 NonBlockingDallas sensorDs18b20(&dallasTemp); //start up the DS18 temp probes
-#define TIME_INTERVAL 4000 //for DS18 probe
+#define TIME_INTERVAL 1500 //for DS18 probe
 
 Adafruit_SHT4x sht4 = Adafruit_SHT4x();
   sensors_event_t humidity, temp;
@@ -159,7 +157,8 @@ BLYNK_WRITE(V19)
                 sht4.getEvent(&humidity, &temp);
           tempBME = temp.temperature;
           humBME = humidity.relative_humidity;
-        terminal.print("> tempBME[v0],tempPool[v5],humidex[v17],dewpoint[v2]: ");
+          sensorDs18b20.requestTemperature();
+        terminal.print("> tempBME[v0],tempPool[v5]: ");
         terminal.print(tempBME);
         terminal.print(",");
         terminal.println(tempPool);
@@ -380,7 +379,6 @@ void setup() {
   myAP3216.setPSIntegrationTime(1);
   myAP3216.setMode(AP3216_ALS_PS_ONCE);
 
-  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   Serial.println("");
@@ -389,11 +387,6 @@ sht4.begin();
   sht4.setHeater(SHT4X_NO_HEATER);
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
-    leds[0] = CRGB(100, 100, 0);
-    FastLED.show();
-    delay(250);
-    leds[0] = CRGB(0, 0, 0);
-    FastLED.show();
     delay(250);
     Serial.print(".");
   }
@@ -402,11 +395,6 @@ sht4.begin();
   Serial.println(ssid);
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-    leds[0] = CRGB(0, 100, 0);
-    FastLED.show();
-    delay(1000);
-    leds[0] = CRGB(0, 0, 0);
-    FastLED.show();
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send(200, "text/plain", "Hi! I am ESP32.");
   });
@@ -438,8 +426,6 @@ sht4.begin();
     terminal.println(WiFi.RSSI());
     printLocalTime();
     terminal.flush();
-        leds[0] = CRGB(0, 100, 0);
-        FastLED.show();
         delay(1500);
         sensorDs18b20.requestTemperature();
         delay(1500);
