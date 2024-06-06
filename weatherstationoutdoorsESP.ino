@@ -18,6 +18,7 @@
 #include <GxEPD2_3C.h>
 #include <Fonts/FreeSerif9pt7b.h>
 #include <Fonts/FreeSerif18pt7b.h> 
+#include <Fonts/DejaVu_Serif_Condensed_60.h>
 
 GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(GxEPD2_213_Z98c(/*CS=D8*/ 2, /*DC=D3*/ 4, /*RST=D4*/ 18, /*BUSY=D2*/ 25)); // GDEW0213Z19 250x122
 
@@ -54,7 +55,7 @@ Average<float> wifiAvg(30);
 OneWire oneWire(POOLTEMP_PIN);
 DallasTemperature dallasTemp(&oneWire);
 NonBlockingDallas sensorDs18b20(&dallasTemp); //start up the DS18 temp probes
-#define TIME_INTERVAL 1500 //for DS18 probe
+#define TIME_INTERVAL 4000 //for DS18 probe
 
 Adafruit_SHT4x sht4 = Adafruit_SHT4x();
   sensors_event_t humidity, temp;
@@ -66,7 +67,7 @@ bool heater = false;
 
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
-const int daylightOffset_sec = 0;   //Replace with your daylight offset (secs)
+const int daylightOffset_sec = 3600;   //Replace with your daylight offset (secs)
 int hours, mins, secs;
 
 char auth[] = "X_pnRUFOab29d3aNrScsKq1dryQYdTw7"; //auth token for Blynk - this is a LOCAL token, can't be used without LAN access
@@ -284,10 +285,6 @@ String windDirection(int temp_wind_deg)   //Source http://snowfence.umn.edu/Comp
   }
 }
 
-void handleTemperatureChange(int deviceIndex, int32_t temperatureRAW){
-  tempPool = sensorDs18b20.rawToCelsius(temperatureRAW);
-}
-
 void printLocalTime()
 {
   time_t rawtime;
@@ -299,6 +296,26 @@ void printLocalTime()
   terminal.println(" - ");
   terminal.flush();
 }
+
+void handleTemperatureChange(int deviceIndex, int32_t temperatureRAW){
+  tempPool = sensorDs18b20.rawToCelsius(temperatureRAW);
+}
+
+void handleIntervalElapsed(int deviceIndex, int32_t temperatureRAW)
+{
+  tempPool = sensorDs18b20.rawToCelsius(temperatureRAW);
+}
+
+void handleDeviceDisconnected(int deviceIndex)
+{
+  terminal.print(F("[NonBlockingDallas] handleDeviceDisconnected ==> deviceIndex="));
+  terminal.print(deviceIndex);
+  terminal.println(F(" disconnected."));
+  printLocalTime();
+  terminal.flush();
+}
+
+
 
 
 
@@ -330,16 +347,27 @@ void setluxrange(){
 }
 
 
+
 void updateDisplay(){
   display.setPartialWindow(0, 0, display.width(), display.height());
   //display.setRotation(1);
   display.setFont(&FreeSerif9pt7b);
   display.setTextColor(GxEPD_BLACK); //GxEPD_RED
   display.firstPage();
-  time_t rawtime;
-  struct tm* timeinfo;
-  time(&rawtime);
-  timeinfo = localtime(&rawtime);
+
+  time_t now = time(NULL);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+
+  // Allocate a char array for the time string
+  char timeString[10]; // "12:34 PM" is 8 chars + null terminator
+
+  // Format the time string
+  if (timeinfo.tm_min < 10) {
+    snprintf(timeString, sizeof(timeString), "%d:0%d %s", timeinfo.tm_hour % 12 == 0 ? 12 : timeinfo.tm_hour % 12, timeinfo.tm_min, timeinfo.tm_hour < 12 ? "AM" : "PM");
+  } else {
+    snprintf(timeString, sizeof(timeString), "%d:%d %s", timeinfo.tm_hour % 12 == 0 ? 12 : timeinfo.tm_hour % 12, timeinfo.tm_min, timeinfo.tm_hour < 12 ? "AM" : "PM");
+  }
   
   do
   {
@@ -351,11 +379,12 @@ void updateDisplay(){
     display.print(pooltempchar);
     display.setCursor(125, 15);
     display.print(airtempchar);
-    display.setCursor(0, 100);
-    display.print(asctime(timeinfo));
+    display.setCursor(0, 114);
     display.setFont(&FreeSerif18pt7b);
-    display.setTextSize(2);
-    display.setCursor(125, 75);
+    display.print(timeString);
+    display.setFont(&DejaVu_Serif_Condensed_60);
+    display.setTextSize(1);
+    display.setCursor(130, 75);
     display.print(tempBME,1);
     display.setCursor(0, 75);
     display.setTextColor(GxEPD_RED); //GxEPD_RED
@@ -366,7 +395,7 @@ void updateDisplay(){
 }
 
 void setup() {
-  tempPool = 42.42;
+  tempPool = 69;
   SPI.begin(HSPI_SCLK, HSPI_MISO, HSPI_MOSI);
   display.init(115200,true,50,false);
   display.setRotation(3);
@@ -406,6 +435,8 @@ sht4.begin();
     Blynk.connect();
   sensorDs18b20.begin(NonBlockingDallas::resolution_12, TIME_INTERVAL);
   sensorDs18b20.onTemperatureChange(handleTemperatureChange);
+  sensorDs18b20.onIntervalElapsed(handleIntervalElapsed);
+  sensorDs18b20.onDeviceDisconnected(handleDeviceDisconnected);
           sht4.getEvent(&humidity, &temp);
           tempBME = temp.temperature;
           humBME = humidity.relative_humidity;
@@ -425,10 +456,10 @@ sht4.begin();
     terminal.print("Signal strength: ");
     terminal.println(WiFi.RSSI());
     printLocalTime();
-    terminal.flush();
-        delay(1500);
         sensorDs18b20.requestTemperature();
-        delay(1500);
+        while (tempPool > 68) {
+          sensorDs18b20.update();
+        }
           updateDisplay();
 }
 
@@ -453,6 +484,7 @@ void loop() {
     if  (millis() - millisBlynk >= 30000)  //if it's been 30 seconds 
     {
         millisBlynk = millis();
+        sensorDs18b20.requestTemperature();
         als = myAP3216.getAmbientLight();
         prox = myAP3216.getProximity();
         ir = myAP3216.getIRData(); // Ambient IR light
