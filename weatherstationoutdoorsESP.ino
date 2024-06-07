@@ -16,9 +16,10 @@
 #include <Adafruit_ADS1X15.h>
 #include <GxEPD2_BW.h>
 #include <GxEPD2_3C.h>
-#include <Fonts/FreeSerif9pt7b.h>
-#include <Fonts/FreeSerif18pt7b.h> 
-#include <Fonts/DejaVu_Serif_Condensed_60.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/Roboto_Condensed_12.h>
+#include <Fonts/FreeSans12pt7b.h> 
+#include <Fonts/Open_Sans_Condensed_Bold_54.h> 
 #include "bitmaps/Bitmaps128x250.h"
 
 GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(GxEPD2_213_Z98c(/*CS=D8*/ 2, /*DC=D3*/ 4, /*RST=D4*/ 18, /*BUSY=D2*/ 25)); // GDEW0213Z19 250x122
@@ -348,15 +349,8 @@ void setluxrange(){
 }
 
 
-
 void updateDisplay(){
-  display.setPartialWindow(0, 0, display.width(), display.height());
-  //display.setRotation(1);
-  display.setFont(&FreeSerif9pt7b);
-  display.setTextColor(GxEPD_BLACK); //GxEPD_RED
-  display.firstPage();
-
-  time_t now = time(NULL);
+      time_t now = time(NULL);
   struct tm timeinfo;
   localtime_r(&now, &timeinfo);
 
@@ -369,46 +363,62 @@ void updateDisplay(){
   } else {
     snprintf(timeString, sizeof(timeString), "%d:%d %s", timeinfo.tm_hour % 12 == 0 ? 12 : timeinfo.tm_hour % 12, timeinfo.tm_min, timeinfo.tm_hour < 12 ? "AM" : "PM");
   }
-  
+
+    //display.clearScreen(); // use default for white
+        bool mirror_y = (display.epd2.panel != GxEPD2::GDE0213B1);
+
+  display.setTextColor(GxEPD_BLACK); //GxEPD_RED
+  display.firstPage();
+  //float tempBME = 24.24;
+  //float tempPool = 69.69;
   do
   {
     display.fillScreen(GxEPD_WHITE);
-    display.setFont(&FreeSerif9pt7b);
+    display.setRotation(3);
+    //display.setPartialWindow(16, 16, display.width()-35, display.height()-50);
+    display.setFont(&Roboto_Condensed_12);
     display.setTextColor(GxEPD_BLACK); //GxEPD_RED
     display.setTextSize(1);
-    display.setCursor(0, 15);
+    display.setCursor(20, 29);
     display.print(pooltempchar);
-    display.setCursor(125, 15);
+    display.setCursor(125, 29);
     display.print(airtempchar);
-    display.setCursor(0, 114);
-    display.setFont(&FreeSerif18pt7b);
-    display.print(timeString);
-    display.setFont(&DejaVu_Serif_Condensed_60);
+
+    display.setFont(&Open_Sans_Condensed_Bold_54);
     display.setTextSize(1);
-    display.setCursor(130, 75);
+    display.setCursor(130, 78);
     display.print(tempBME,1);
-    display.setCursor(0, 75);
+    display.setCursor(20, 78);
     display.setTextColor(GxEPD_RED); //GxEPD_RED
     display.print(tempPool,1);
-
+    //display.setPartialWindow(0, 100, 100, 50);
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(0, 114);
+    display.setTextColor(GxEPD_BLACK);
+    display.print(timeString);
+    //display.drawImage(Bitmap128x250_1, 0, 0, display.epd2.WIDTH, display.epd2.HEIGHT, false, !mirror_y, true);
+    display.setRotation(0);
+    display.drawInvertedBitmap(0, 0, Bitmap128x250_1, display.epd2.WIDTH, display.epd2.HEIGHT, GxEPD_BLACK);
   }
   while (display.nextPage());
+
 }
+
 
 void setup() {
   tempPool = 69;
   SPI.begin(HSPI_SCLK, HSPI_MISO, HSPI_MOSI);
   display.init(115200,true,50,false);
   display.setRotation(3);
-    display.clearScreen(); // use default for white
-        bool mirror_y = (display.epd2.panel != GxEPD2::GDE0213B1);
+    //display.clearScreen(); // use default for white
+    //    bool mirror_y = (display.epd2.panel != GxEPD2::GDE0213B1);
 
-      display.firstPage();
+    //  display.firstPage();
      // do
       //{
       //  display.fillScreen(GxEPD_WHITE);
-        display.drawImage(Bitmap128x250_1, 0, 0, display.epd2.WIDTH, display.epd2.HEIGHT, false, mirror_y, true);
-  delay(60000);
+   //     display.drawImage(Bitmap128x250_1, 0, 0, display.epd2.WIDTH, display.epd2.HEIGHT, false, mirror_y, true);
+  //delay(60000);
   ads.begin();
   ads.setGain(GAIN_TWO);
   pinMode(POOLTEMP_PIN, INPUT_PULLUP);
