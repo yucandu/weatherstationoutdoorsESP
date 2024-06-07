@@ -19,6 +19,7 @@
 #include <Fonts/FreeSerif9pt7b.h>
 #include <Fonts/FreeSerif18pt7b.h> 
 #include <Fonts/DejaVu_Serif_Condensed_60.h>
+#include "bitmaps/Bitmaps128x250.h"
 
 GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(GxEPD2_213_Z98c(/*CS=D8*/ 2, /*DC=D3*/ 4, /*RST=D4*/ 18, /*BUSY=D2*/ 25)); // GDEW0213Z19 250x122
 
@@ -399,6 +400,15 @@ void setup() {
   SPI.begin(HSPI_SCLK, HSPI_MISO, HSPI_MOSI);
   display.init(115200,true,50,false);
   display.setRotation(3);
+    display.clearScreen(); // use default for white
+        bool mirror_y = (display.epd2.panel != GxEPD2::GDE0213B1);
+
+      display.firstPage();
+     // do
+      //{
+      //  display.fillScreen(GxEPD_WHITE);
+        display.drawImage(Bitmap128x250_1, 0, 0, display.epd2.WIDTH, display.epd2.HEIGHT, false, mirror_y, true);
+  delay(60000);
   ads.begin();
   ads.setGain(GAIN_TWO);
   pinMode(POOLTEMP_PIN, INPUT_PULLUP);
