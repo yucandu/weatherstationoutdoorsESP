@@ -21,6 +21,20 @@
 #include <Fonts/FreeSans12pt7b.h> 
 #include <Fonts/Open_Sans_Condensed_Bold_54.h> 
 #include "bitmaps/Bitmaps128x250.h"
+#include <SensirionI2CSen5x.h>
+#include <Wire.h>
+
+// The used commands use up to 48 bytes. On some Arduino's the default buffer
+// space is not large enough
+#define MAXBUF_REQUIREMENT 48
+
+#if (defined(I2C_BUFFER_LENGTH) &&                 \
+     (I2C_BUFFER_LENGTH >= MAXBUF_REQUIREMENT)) || \
+    (defined(BUFFER_LENGTH) && BUFFER_LENGTH >= MAXBUF_REQUIREMENT)
+#define USE_PRODUCT_INFO
+#endif
+
+SensirionI2CSen5x sen5x;
 
 GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(GxEPD2_213_Z98c(/*CS=D8*/ 2, /*DC=D3*/ 4, /*RST=D4*/ 18, /*BUSY=D2*/ 25)); // GDEW0213Z19 250x122
 
@@ -82,9 +96,21 @@ char remoteAuth4[] = "19oL8t8mImCdoUqYhfhk6DADL7540f8s"; //TDSMeter  auth
 const char* ssid = "mikesnet";
 const char* password = "springchicken";
 
-float old1p0, old2p5, old10, new1p0, new2p5, new10;
-float old1p0a, old2p5a, old10a, new1p0a, new2p5a, new10a;
-unsigned int up3, up5, up10, up25, up50, up100;
+    float massConcentrationPm1p0;
+    float massConcentrationPm2p5;
+    float massConcentrationPm4p0;
+    float massConcentrationPm10p0;
+    float ambientHumidity;
+    float ambientTemperature;
+    float vocIndex;
+    float noxIndex;
+    float numberConcentrationPm0p5;
+    float numberConcentrationPm1p0;
+    float numberConcentrationPm2p5;
+    float numberConcentrationPm4p0;
+    float numberConcentrationPm10p0;
+    float typicalParticleSize;
+
 float abshumBME, tempBME, presBME, humBME, ds18temp, gasBME, tempPool;
 int firstvalue = 1;
 float bridgedata, windbridgedata, windmps, winddir;
@@ -115,6 +141,70 @@ WidgetBridge bridge4(V90);
     static uint32_t __every__##interval = millis(); \
     if (millis() - __every__##interval >= interval && (__every__##interval = millis()))
 
+void printModuleVersions() {
+    uint16_t error;
+    char errorMessage[256];
+
+    unsigned char productName[32];
+    uint8_t productNameSize = 32;
+
+    error = sen5x.getProductName(productName, productNameSize);
+
+    if (error) {
+        terminal.print("Error trying to execute getProductName(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("ProductName:");
+        terminal.println((char*)productName);
+    }
+
+    uint8_t firmwareMajor;
+    uint8_t firmwareMinor;
+    bool firmwareDebug;
+    uint8_t hardwareMajor;
+    uint8_t hardwareMinor;
+    uint8_t protocolMajor;
+    uint8_t protocolMinor;
+
+    error = sen5x.getVersion(firmwareMajor, firmwareMinor, firmwareDebug,
+                             hardwareMajor, hardwareMinor, protocolMajor,
+                             protocolMinor);
+    if (error) {
+        terminal.print("Error trying to execute getVersion(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("Firmware: ");
+        terminal.print(firmwareMajor);
+        terminal.print(".");
+        terminal.print(firmwareMinor);
+        terminal.print(", ");
+
+        terminal.print("Hardware: ");
+        terminal.print(hardwareMajor);
+        terminal.print(".");
+        terminal.println(hardwareMinor);
+    }
+  terminal.flush();
+}
+
+void printSerialNumber() {
+    uint16_t error;
+    char errorMessage[256];
+    unsigned char serialNumber[32];
+    uint8_t serialNumberSize = 32;
+
+    error = sen5x.getSerialNumber(serialNumber, serialNumberSize);
+    if (error) {
+        terminal.print("Error trying to execute getSerialNumber(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("SerialNumber:");
+        terminal.println((char*)serialNumber);
+    }
+}
 
 BLYNK_WRITE(V21)
 {
@@ -144,6 +234,7 @@ BLYNK_WRITE(V19)
     terminal.println("heater");
     terminal.println("reset");
     terminal.println("tds");
+    terminal.println("sen");
      terminal.println("==End of list.==");
     }
         if (String("wifi") == param.asStr()) 
@@ -193,12 +284,72 @@ BLYNK_WRITE(V19)
   if (String("reset") == param.asStr()) {
     terminal.println("Restarting...");
     terminal.flush();
-    ESP.restart();
+    
   }
   if (String("tds") == param.asStr()) {
     adc0 = ads.readADC_SingleEnded(0);
     terminal.print("ADC0: ");
     terminal.println(adc0);    
+  }
+  if (String("sen") == param.asStr()) {
+        getsen5x();
+        terminal.print("MassConcentrationPm1p0:");
+        terminal.print(massConcentrationPm1p0);
+        terminal.print("\t");
+        terminal.print("MassConcentrationPm2p5:");
+        terminal.print(massConcentrationPm2p5);
+        terminal.print("\t");
+        terminal.print("MassConcentrationPm4p0:");
+        terminal.print(massConcentrationPm4p0);
+        terminal.print("\t");
+        terminal.print("MassConcentrationPm10p0:");
+        terminal.print(massConcentrationPm10p0);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm0p5:");
+        terminal.print(numberConcentrationPm0p5);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm1p0:");
+        terminal.print(numberConcentrationPm1p0);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm2p5:");
+        terminal.print(numberConcentrationPm2p5);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm4p0:");
+        terminal.print(numberConcentrationPm4p0);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm10p0:");
+        terminal.print(numberConcentrationPm10p0);
+        terminal.print("\t");
+        terminal.print("typicalParticleSize:");
+        terminal.print(typicalParticleSize);
+        terminal.print("\t");
+        terminal.print("AmbientHumidity:");
+        if (isnan(ambientHumidity)) {
+            terminal.print("n/a");
+        } else {
+            terminal.print(ambientHumidity);
+        }
+        terminal.print("\t");
+        terminal.print("AmbientTemperature:");
+        if (isnan(ambientTemperature)) {
+            terminal.print("n/a");
+        } else {
+            terminal.print(ambientTemperature);
+        }
+        terminal.print("\t");
+        terminal.print("VocIndex:");
+        if (isnan(vocIndex)) {
+            terminal.print("n/a");
+        } else {
+            terminal.print(vocIndex);
+        }
+        terminal.print("\t");
+        terminal.print("NoxIndex:");
+        if (isnan(noxIndex)) {
+            terminal.println("n/a");
+        } else {
+            terminal.println(noxIndex);
+        }
   }
     terminal.flush();
 
@@ -219,12 +370,12 @@ float windgust;
 
 BLYNK_WRITE(V57){
     float pinData = param.asFloat();
-windgust = pinData;
+  windgust = pinData;
 }
 
 BLYNK_WRITE(V58){
     int pinData = param.asInt();
-winddir = pinData;
+  winddir = pinData;
 }
 
 String windDirection(int temp_wind_deg)   //Source http://snowfence.umn.edu/Components/winddirectionanddegreeswithouttable3.htm
@@ -310,11 +461,11 @@ void handleIntervalElapsed(int deviceIndex, int32_t temperatureRAW)
 
 void handleDeviceDisconnected(int deviceIndex)
 {
-  terminal.print(F("[NonBlockingDallas] handleDeviceDisconnected ==> deviceIndex="));
-  terminal.print(deviceIndex);
-  terminal.println(F(" disconnected."));
-  printLocalTime();
-  terminal.flush();
+  //terminal.print(F("[NonBlockingDallas] handleDeviceDisconnected ==> deviceIndex="));
+  //terminal.print(deviceIndex);
+  //terminal.println(F(" disconnected."));
+  //printLocalTime();
+  //terminal.flush();
 }
 
 
@@ -401,13 +552,14 @@ void updateDisplay(){
     display.drawInvertedBitmap(0, 0, Bitmap128x250_1, display.epd2.WIDTH, display.epd2.HEIGHT, GxEPD_BLACK);
   }
   while (display.nextPage());
-
+  display.hibernate();
 }
 
 
 void setup() {
   tempPool = 69;
   SPI.begin(HSPI_SCLK, HSPI_MISO, HSPI_MOSI);
+
   display.init(115200,true,50,false);
   display.setRotation(3);
     //display.clearScreen(); // use default for white
@@ -467,6 +619,10 @@ sht4.begin();
     hours = timeinfo.tm_hour;
     mins = timeinfo.tm_min;
     secs = timeinfo.tm_sec;
+    Wire.begin();
+
+    sen5x.begin(Wire);
+
     terminal.println("********************************");
     terminal.println("BEGIN OUTDOOR WEATHER STATION v3.6");
     terminal.print("Connected to: ");
@@ -476,11 +632,42 @@ sht4.begin();
     terminal.print("Signal strength: ");
     terminal.println(WiFi.RSSI());
     printLocalTime();
+    uint16_t error;
+    char errorMessage[256];
+    error = sen5x.deviceReset();
+    if (error) {
+        terminal.print("Error trying to execute deviceReset(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    }
+    #ifdef USE_PRODUCT_INFO
+    printSerialNumber();
+    printModuleVersions();
+    #endif
+    float tempOffset = 0.0;
+    error = sen5x.setTemperatureOffsetSimple(tempOffset);
+    if (error) {
+        terminal.print("Error trying to execute setTemperatureOffsetSimple(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("Temperature Offset set to ");
+        terminal.print(tempOffset);
+        terminal.println(" deg. Celsius (SEN54/SEN55 only");
+    }
+    error = sen5x.startMeasurement();
+    if (error) {
+        terminal.print("Error trying to execute startMeasurement(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    }
+
         sensorDs18b20.requestTemperature();
         while (tempPool > 68) {
           sensorDs18b20.update();
         }
           updateDisplay();
+          
 }
 
 BLYNK_CONNECTED() {
@@ -488,6 +675,18 @@ BLYNK_CONNECTED() {
   bridge2.setAuthToken (remoteAuth2);
   bridge3.setAuthToken (remoteAuth3);
   bridge4.setAuthToken (remoteAuth4);
+}
+
+void getsen5x() {
+sen5x.readMeasuredValues(
+        massConcentrationPm1p0, massConcentrationPm2p5, massConcentrationPm4p0,
+        massConcentrationPm10p0, ambientHumidity, ambientTemperature, vocIndex,
+        noxIndex);
+  sen5x.readMeasuredPmValues(     massConcentrationPm1p0,  massConcentrationPm2p5,
+     massConcentrationPm4p0,  massConcentrationPm10p0,
+     numberConcentrationPm0p5,  numberConcentrationPm1p0,
+     numberConcentrationPm2p5,  numberConcentrationPm4p0,
+     numberConcentrationPm10p0,  typicalParticleSize);
 }
 
 
@@ -510,7 +709,7 @@ void loop() {
         ir = myAP3216.getIRData(); // Ambient IR light
         setluxrange();
         myAP3216.setMode(AP3216_ALS_PS_ONCE);
-        
+        getsen5x();
 
           sht4.getEvent(&humidity, &temp);
           tempBME = temp.temperature;
@@ -526,6 +725,26 @@ void loop() {
           Blynk.virtualWrite(V2, dewpoint);
           Blynk.virtualWrite(V3, humBME);
           Blynk.virtualWrite(V4, abshumBME);
+/*ambientHumidity, ambientTemperature, vocIndex,
+   massConcentrationPm1p0,  massConcentrationPm2p5,
+     massConcentrationPm4p0,  massConcentrationPm10p0,
+     numberConcentrationPm0p5,  numberConcentrationPm1p0,
+     numberConcentrationPm2p5,  numberConcentrationPm4p0,
+     numberConcentrationPm10p0,  typicalParticleSize*/
+          Blynk.virtualWrite(V8,massConcentrationPm1p0);
+          Blynk.virtualWrite(V9, massConcentrationPm2p5);
+          Blynk.virtualWrite(V10, massConcentrationPm10p0);
+          Blynk.virtualWrite(V11, massConcentrationPm4p0);
+          Blynk.virtualWrite(V12, numberConcentrationPm0p5);
+          Blynk.virtualWrite(V13, numberConcentrationPm1p0);
+          Blynk.virtualWrite(V14, numberConcentrationPm2p5);
+          Blynk.virtualWrite(V15, numberConcentrationPm4p0);
+          Blynk.virtualWrite(V16, numberConcentrationPm10p0);
+          Blynk.virtualWrite(V22, typicalParticleSize);
+          Blynk.virtualWrite(V23, ambientTemperature);
+          Blynk.virtualWrite(V24, ambientHumidity);
+          Blynk.virtualWrite(V25, vocIndex);
+
           Blynk.virtualWrite(V17, humidex);
           bridge1.virtualWrite(V73, tempBME);
           //bridge1.virtualWrite(V63, abshumBME);
