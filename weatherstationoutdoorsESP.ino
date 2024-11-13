@@ -111,7 +111,7 @@ const char* password = "springchicken";
     float numberConcentrationPm10p0;
     float typicalParticleSize;
 
-float abshumBME, tempBME, presBME, humBME, ds18temp, gasBME, tempPool;
+float abshumBME, abshumSEN, tempBME, presBME, humBME, ds18temp, gasBME, tempPool;
 int firstvalue = 1;
 float bridgedata, windbridgedata, windmps, winddir;
 double windchill;
@@ -284,7 +284,7 @@ BLYNK_WRITE(V19)
   if (String("reset") == param.asStr()) {
     terminal.println("Restarting...");
     terminal.flush();
-    
+    ESP.restart();
   }
   if (String("tds") == param.asStr()) {
     adc0 = ads.readADC_SingleEnded(0);
@@ -350,6 +350,15 @@ BLYNK_WRITE(V19)
         } else {
             terminal.println(noxIndex);
         }
+        terminal.print("Device Status: ");
+        uint16_t error;
+        char errorMessage[256];
+    uint32_t number = 21;
+    uint32_t* numberPtr = &number;
+         error = sen5x.readDeviceStatus(*numberPtr);
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+        terminal.println(number);
   }
     terminal.flush();
 
@@ -666,6 +675,8 @@ sht4.begin();
         while (tempPool > 68) {
           sensorDs18b20.update();
         }
+        terminal.println("Busy while updating e-ink display, 15s.");
+        terminal.flush();
           updateDisplay();
           
 }
@@ -715,6 +726,7 @@ void loop() {
           tempBME = temp.temperature;
           humBME = humidity.relative_humidity;
         abshumBME = (6.112 * pow(2.71828, ((17.67 * tempBME)/(tempBME + 243.5))) * humBME * 2.1674)/(273.15 + tempBME); //calculate absolute humidity
+        abshumSEN = (6.112 * pow(2.71828, ((17.67 * ambientTemperature)/(ambientTemperature + 243.5))) * ambientHumidity * 2.1674)/(273.15 + ambientTemperature); //calculate absolute humidity
         dewpoint = tempBME - ((100 - humBME)/5); //calculate dewpoint
         humidex = tempBME + 0.5555 * (6.11 * pow(2.71828, 5417.7530*( (1/273.16) - (1/(273.15 + dewpoint)) ) ) - 10); //calculate humidex using Environment Canada formula
         windchill  = 13.12 + (0.6215*tempBME) - (11.37*pow(windbridgedata,0.16)) + (0.3965*tempBME*pow(windbridgedata,0.16));
@@ -744,6 +756,7 @@ void loop() {
           Blynk.virtualWrite(V23, ambientTemperature);
           Blynk.virtualWrite(V24, ambientHumidity);
           Blynk.virtualWrite(V25, vocIndex);
+          Blynk.virtualWrite(V26, abshumSEN);
 
           Blynk.virtualWrite(V17, humidex);
           bridge1.virtualWrite(V73, tempBME);
@@ -752,6 +765,7 @@ void loop() {
           bridge2.virtualWrite(V63, abshumBME);
           bridge2.virtualWrite(V64, windchill);
           bridge2.virtualWrite(V65, humidex);
+          bridge2.virtualWrite(V66, massConcentrationPm2p5);
           
           bridge3.virtualWrite(V61, tempPool);
           bridge4.virtualWrite(V61, tempPool);
@@ -762,7 +776,7 @@ void loop() {
           bridge3.virtualWrite(V64, windchill);
           bridge3.virtualWrite(V65, humidex);
           bridge3.virtualWrite(V66, windgust);
-          bridge3.virtualWrite(V67, bridgedata);
+          bridge3.virtualWrite(V67, massConcentrationPm2p5);
           bridge3.virtualWrite(V68, windbridgedata);
           bridge3.virtualWrite(V69, winddir); 
         }
@@ -776,7 +790,7 @@ void loop() {
           Blynk.virtualWrite(V33, windDirection(winddir));
         }
         if (bridgedata > 0) {Blynk.virtualWrite(V53, bridgedata);
-        bridge1.virtualWrite(V61, bridgedata);}
+        bridge1.virtualWrite(V61, massConcentrationPm2p5);}
         Blynk.virtualWrite(V35, als);
         Blynk.virtualWrite(V36, prox);
         Blynk.virtualWrite(V37, ir);  
@@ -791,11 +805,11 @@ void loop() {
         float tdsValue = (133.42*compensationVoltage*compensationVoltage*compensationVoltage - 255.86*compensationVoltage*compensationVoltage + 857.39*compensationVoltage)*0.5;
         float tdsuncompValue = (133.42*volts0*volts0*volts0 - 255.86*volts0*volts0 + 857.39*volts0)*0.5;
         float newTDS = tdsuncompValue - (2.027 * tempBME);
-        Blynk.virtualWrite(V41, adc0);
-        Blynk.virtualWrite(V42, volts0);
-        Blynk.virtualWrite(V43, tdsValue);
-        Blynk.virtualWrite(V44, tdsuncompValue);
-        Blynk.virtualWrite(V45, newTDS);
+        //Blynk.virtualWrite(V41, adc0);
+        //Blynk.virtualWrite(V42, volts0);
+        //Blynk.virtualWrite(V43, tdsValue);
+        //Blynk.virtualWrite(V44, tdsuncompValue);
+        //Blynk.virtualWrite(V45, newTDS);
     }
 
   every(300000){
