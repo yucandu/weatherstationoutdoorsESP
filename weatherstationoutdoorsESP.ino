@@ -369,7 +369,7 @@ BLYNK_WRITE(V51){
     bridgedata = pinData; //bridgedata is pm25data
 }
 
-BLYNK_WRITE(V56){
+BLYNK_WRITE(V72){
     float pinData = param.asFloat();
     windbridgedata = pinData;
     windmps = windbridgedata / 3.6;
@@ -377,12 +377,12 @@ BLYNK_WRITE(V56){
 
 float windgust;
 
-BLYNK_WRITE(V57){
+BLYNK_WRITE(V74){
     float pinData = param.asFloat();
   windgust = pinData;
 }
 
-BLYNK_WRITE(V58){
+BLYNK_WRITE(V73){
     int pinData = param.asInt();
   winddir = pinData;
 }
