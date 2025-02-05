@@ -1171,7 +1171,7 @@ void loop() {
         bridge2.virtualWrite(V72, tempSHT);
         bridge2.virtualWrite(V73, humSHT);
         bridge2.virtualWrite(V74, abshumSHT);
-        bridge2.virtualWrite(V75, bmeiaq);
+        bridge2.virtualWrite(V75, voc_index);
         bridge2.virtualWrite(V76, presBME);
         bridge2.virtualWrite(V77, co2SCD);
         bridge2.virtualWrite(V78, inetwind);
