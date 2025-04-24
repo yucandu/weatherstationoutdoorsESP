@@ -1,227 +1,674 @@
 #include <Arduino.h>
-#include <ArduinoOTA.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
-#include <HTTPClient.h>
-#include <Arduino_JSON.h>
-
-
+#include <ESPAsyncWebServer.h>
+#include <AsyncElegantOTA.h>
 #include <BlynkSimpleEsp32.h>
 #include "time.h"
-//#include <PMserial.h> // Arduino library for PM sensors with serial interface
-#include <FastLED.h>
-#include <WiFiManager.h> 
 
-#include <Average.h>
-#if defined(ARDUINO_ARCH_ESP32) || (ARDUINO_ARCH_ESP8266)
-#include <EEPROM.h>
-#define USE_EEPROM
-#endif
-#include <bsec2.h>
-#include "config/bme680_iaq_33v_3s_28d/bsec_iaq.h"
-//#include "FS.h"
-#include <nvs_flash.h>
-//#include "SD.h"
-//#include <SPI.h>
-
-#include <Adafruit_SCD30.h>
 #include "Adafruit_SHT4x.h"
-#include <NOxGasIndexAlgorithm.h>
-#include <SensirionI2CSgp41.h>
-#include <SensirionI2cSht4x.h>
-#include <VOCGasIndexAlgorithm.h>
-#include <ze08_ch2o.h>
-#include <SoftwareSerial.h>
-#include "MyLD2410.h"
-#define RX2 12
-#define TX2 13
-#define LED_PIN 15  
-#define ADC_PIN 35
-#define BUTTON_PIN 4
-#define NUM_LEDS 1
+#include <Average.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <NonBlockingDallas.h>     
 
-SoftwareSerial MySerial1(RX2, TX2);
-MyLD2410 sensor(Serial2);
-Ze08CH2O ch2o{&MySerial1};
-float lastReading = 0;
-SensirionI2cSht4x sht4x;
-SensirionI2CSgp41 sgp41;
+#include <AP3216_WE.h>
 
-VOCGasIndexAlgorithm voc_algorithm;
-NOxGasIndexAlgorithm nox_algorithm;
+#include <GxEPD2_BW.h>
+#include <GxEPD2_3C.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/Roboto_Condensed_12.h>
+#include <Fonts/FreeSans12pt7b.h> 
+#include <Fonts/Open_Sans_Condensed_Bold_54.h> 
+#include "bitmaps/Bitmaps128x250.h"
+#include <SensirionI2CSen5x.h>
+#include <Wire.h>
 
-uint16_t conditioning_s = 10;
-int sensorcount;
-long stasignal, movingsignal, stadistance, movingdistance, anydistance;
+// The used commands use up to 48 bytes. On some Arduino's the default buffer
+// space is not large enough
+#define MAXBUF_REQUIREMENT 48
 
-char errorMessage[256];
-    uint16_t error;
-    float humidity = 0;     // %RH
-    float temperature = 0;  // degreeC
-    uint16_t srawVoc = 0;
-    uint16_t srawNox = 0;
-    uint16_t defaultCompenstaionRh = 0x8000;  // in ticks as defined by SGP41
-    uint16_t defaultCompenstaionT = 0x6666;   // in ticks as defined by SGP41
-    uint16_t compensationRh = 0;              // in ticks as defined by SGP41
-    uint16_t compensationT = 0;               // in ticks as defined by SGP41
-        int32_t voc_index;
-        int32_t nox_index;
+#if (defined(I2C_BUFFER_LENGTH) &&                 \
+     (I2C_BUFFER_LENGTH >= MAXBUF_REQUIREMENT)) || \
+    (defined(BUFFER_LENGTH) && BUFFER_LENGTH >= MAXBUF_REQUIREMENT)
+#define USE_PRODUCT_INFO
+#endif
+
+SensirionI2CSen5x sen5x;
+
+GxEPD2_3C<GxEPD2_213_Z98c, GxEPD2_213_Z98c::HEIGHT> display(GxEPD2_213_Z98c(/*CS=D8*/ 2, /*DC=D3*/ 4, /*RST=D4*/ 18, /*BUSY=D2*/ 25)); // GDEW0213Z19 250x122
+
+const char pooltempchar[] = "Pool Temp:";
+const char airtempchar[] = "Air Temp:";
+
+#define HSPI_MISO 12
+#define HSPI_MOSI 13
+#define HSPI_SCLK 14
+
+#define POOLTEMP_PIN 32
 
 
-Adafruit_SCD30  scd30;
-#define SCD_OFFSET 210
 
-//#define SD_CS 5
-//String dataMessage;
+AP3216_WE myAP3216 = AP3216_WE();
 
-#include "Plantower_PMS7003.h"
 char output[256];
-Plantower_PMS7003 pms7003 = Plantower_PMS7003();
 
 
-CRGB leds[NUM_LEDS];
 
-Average<float> pm1Avg(30);
-Average<float> pm25Avg(30);
-Average<float> pm10Avg(30);
-Average<float> pm1aAvg(30);
-Average<float> pm25aAvg(30);
-Average<float> pm10aAvg(30);
+
+  float als; 
+  unsigned int prox;
+  unsigned int ir;
+
+
 Average<float> wifiAvg(30);
 
-const char* url = "http://api.weatherapi.com/v1/current.json?key=093799c32dfb409695c210114240412&q=Stratford,CA";
+OneWire oneWire(POOLTEMP_PIN);
+DallasTemperature dallasTemp(&oneWire);
+NonBlockingDallas sensorDs18b20(&dallasTemp); //start up the DS18 temp probes
+#define TIME_INTERVAL 4000 //for DS18 probe
 
-#define every(interval) \
-    static uint32_t __every__##interval = millis(); \
-    if (millis() - __every__##interval >= interval && (__every__##interval = millis()))
+Adafruit_SHT4x sht4 = Adafruit_SHT4x();
+  sensors_event_t humidity, temp;
 
-//SerialPM pms(PMSx003, Serial); // PMSx003, UART
+
+bool heater = false;
+
+
 
 const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
-const int daylightOffset_sec = 0;   //Replace with your daylight offset (secs)
+const int daylightOffset_sec = 3600;   //Replace with your daylight offset (secs)
 int hours, mins, secs;
-bool buttonpressed = false;
-bool buttonstart = false;
 
-char auth[] = "eT_7FL7IUpqonthsAr-58uTK_-su_GYy"; //BLYNK
-char remoteAuth[] = "Eg3J3WA0zM3MA7HGJjT_P6uUh73wQ2ed"; //dude  auth
+char auth[] = "X_pnRUFOab29d3aNrScsKq1dryQYdTw7"; //auth token for Blynk - this is a LOCAL token, can't be used without LAN access
+char remoteAuth[] = "pO--Yj8ksH2fjJLMW6yW9trkHBhd9-wc";  //costello auth
 char remoteAuth2[] = "8_-CN2rm4ki9P3i_NkPhxIbCiKd5RXhK"; //hubert clock auth
 char remoteAuth3[] = "qS5PQ8pvrbYzXdiA4I6uLEWYfeQrOcM4"; //indiana clock auth
-char remoteAuth4[] = "X_pnRUFOab29d3aNrScsKq1dryQYdTw7"; //outdoors auth
+char remoteAuth4[] = "19oL8t8mImCdoUqYhfhk6DADL7540f8s"; //TDSMeter  auth
+
 
 const char* ssid = "mikesnet";
 const char* password = "springchicken";
 
-float batteryVolts;
-float old1p0, old2p5, old10, new1p0, new2p5, new10;
-float old1p0a, old2p5a, old10a, new1p0a, new2p5a, new10a;
-unsigned int up3, up5, up10, up25, up50, up100;
-float abshumBME, tempBME, presBME, humBME, gasBME, dewpoint, humidex, tempSHT, humSHT, abshumSHT, dewpointSHT, humidexSHT;
-float tempSCD, humSCD, co2SCD, abshumSCD;
-float bmeiaq, bmeiaqAccuracy, bmestaticIaq, bmeco2Equivalent, bmebreathVocEquivalent, bmestabStatus, bmerunInStatus, bmegasPercentage;
-double inettemp, inetwind, inetwinddir, inetgust;
-int firstvalue = 1;
-int blynkWait = 60000;
-float bridgedata, bridgetemp, bridgehum, windbridgedata, windmps, winddir;
-double windchill;
+    float massConcentrationPm1p0;
+    float massConcentrationPm2p5;
+    float massConcentrationPm4p0;
+    float massConcentrationPm10p0;
+    float ambientHumidity;
+    float ambientTemperature;
+    float vocIndex;
+    float noxIndex;
+    float numberConcentrationPm0p5;
+    float numberConcentrationPm1p0;
+    float numberConcentrationPm2p5;
+    float numberConcentrationPm4p0;
+    float numberConcentrationPm10p0;
+    float typicalParticleSize;
 
+float abshumBME, abshumSEN, tempBME, presBME, humBME, ds18temp, gasBME, tempPool;
+int firstvalue = 1;
+float bridgedata, windbridgedata, windmps, winddir;
+double windchill;
+float dewpoint = 0;
+float humidex = 0;
 unsigned long lastmillis = 0;
 unsigned long millisBlynk = 0;
 unsigned long millisAvg = 0;
 unsigned long deltamillis = 0;
 unsigned long rgbmillis = 0;
-int zebraR, zebraG, zebraB, sliderValue;
+int zebraR, zebraG, zebraB;
+int sliderValue = 128;
 int menuValue = 2;
+int luxrange = 1;
 float  pmR, pmG, pmB;
 bool rgbON = true;
 
-WidgetTerminal terminal(V14); //terminal widget
-WidgetBridge bridge1(V70);
-WidgetBridge bridge2(V60);
-WidgetBridge bridge3(V50);
-WidgetBridge bridge4(V40);
+AsyncWebServer server(80);
 
+WidgetTerminal terminal(V19); //terminal widget
+WidgetBridge bridge1(V60);
+WidgetBridge bridge2(V70);
+WidgetBridge bridge3(V80);
+WidgetBridge bridge4(V90);
 
-#define STATE_SAVE_PERIOD UINT32_C(720 * 60 * 1000) /* 360 minutes - 4 times a day */
-#define PANIC_LED 2
-#define ERROR_DUR 250
+#define every(interval) \
+    static uint32_t __every__##interval = millis(); \
+    if (millis() - __every__##interval >= interval && (__every__##interval = millis()))
 
+void printModuleVersions() {
+    uint16_t error;
+    char errorMessage[256];
 
+    unsigned char productName[32];
+    uint8_t productNameSize = 32;
 
-/* Helper functions declarations */
-/**
- * @brief : This function toggles the led continuously with one second delay
- */
-void errLeds(void);
+    error = sen5x.getProductName(productName, productNameSize);
 
-/**
- * @brief : This function checks the BSEC status, prints the respective error code. Halts in case of error
- * @param[in] bsec  : Bsec2 class object
- */
-void checkBsecStatus(Bsec2 bsec);
+    if (error) {
+        terminal.print("Error trying to execute getProductName(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("ProductName:");
+        terminal.println((char*)productName);
+    }
 
-/**
- * @brief : This function updates/saves BSEC state
- * @param[in] bsec  : Bsec2 class object
- */
-void updateBsecState(Bsec2 bsec);
+    uint8_t firmwareMajor;
+    uint8_t firmwareMinor;
+    bool firmwareDebug;
+    uint8_t hardwareMajor;
+    uint8_t hardwareMinor;
+    uint8_t protocolMajor;
+    uint8_t protocolMinor;
 
-/**
- * @brief : This function is called by the BSEC library when a new output is available
- * @param[in] input     : BME68X sensor data before processing
- * @param[in] outputs   : Processed BSEC BSEC output data
- * @param[in] bsec      : Instance of BSEC2 calling the callback
- */
-void newDataCallback(const bme68xData data, const bsecOutputs outputs, Bsec2 bsec);
+    error = sen5x.getVersion(firmwareMajor, firmwareMinor, firmwareDebug,
+                             hardwareMajor, hardwareMinor, protocolMajor,
+                             protocolMinor);
+    if (error) {
+        terminal.print("Error trying to execute getVersion(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("Firmware: ");
+        terminal.print(firmwareMajor);
+        terminal.print(".");
+        terminal.print(firmwareMinor);
+        terminal.print(", ");
 
-/**
- * @brief : This function retrieves the existing state
- * @param : Bsec2 class object
- */
-bool loadState(Bsec2 bsec);
+        terminal.print("Hardware: ");
+        terminal.print(hardwareMajor);
+        terminal.print(".");
+        terminal.println(hardwareMinor);
+    }
+  terminal.flush();
+}
 
-/**
- * @brief : This function writes the state into EEPROM
- * @param : Bsec2 class object
- */
-bool saveState(Bsec2 bsec);
+void printSerialNumber() {
+    uint16_t error;
+    char errorMessage[256];
+    unsigned char serialNumber[32];
+    uint8_t serialNumberSize = 32;
 
+    error = sen5x.getSerialNumber(serialNumber, serialNumberSize);
+    if (error) {
+        terminal.print("Error trying to execute getSerialNumber(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("SerialNumber:");
+        terminal.println((char*)serialNumber);
+    }
+}
 
-Bsec2 envSensor;
-#ifdef USE_EEPROM
-static uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE];
-#endif
-/* Gas estimate names will be according to the configuration classes used */
-const String gasName[] = { "Field Air", "Hand sanitizer", "Undefined 3", "Undefined 4"};
+BLYNK_WRITE(V21)
+{
+   menuValue = param.asInt(); // assigning incoming value from pin V1 to a variable
+}
 
-String jsonBuffer;
+BLYNK_WRITE(V34)
+{
+   sliderValue = param.asInt(); // assigning incoming value from pin V1 to a variable
+}
 
-String httpGETRequest(const char* serverName) {
-  WiFiClient client;
-  HTTPClient http;
-    
-  // Your Domain name with URL path or IP address with path
-  http.begin(client, serverName);
-  
-  // Send HTTP POST request
-  int httpResponseCode = http.GET();
-  
-  String payload = "{}"; 
-  
-  if (httpResponseCode>0) {
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
-    payload = http.getString();
+BLYNK_WRITE(V18)
+{
+     zebraR = param[0].asInt();
+     zebraG = param[1].asInt();
+     zebraB = param[2].asInt();
+}
+
+BLYNK_WRITE(V19)
+{
+    if (String("help") == param.asStr()) 
+    {
+    terminal.println("==List of available commands:==");
+    terminal.println("wifi");
+    terminal.println("temps");
+    terminal.println("wets");
+    terminal.println("heater");
+    terminal.println("reset");
+    terminal.println("tds");
+    terminal.println("sen");
+     terminal.println("==End of list.==");
+    }
+        if (String("wifi") == param.asStr()) 
+    {
+        terminal.print("> Connected to: ");
+        terminal.println(WiFi.SSID());
+        terminal.print("IP address:");
+        terminal.println(WiFi.localIP());
+        terminal.print("Signal strength: ");
+        terminal.println(WiFi.RSSI());
+    }
+
+    if (String("temps") == param.asStr()) {
+                sht4.getEvent(&humidity, &temp);
+          tempBME = temp.temperature;
+          humBME = humidity.relative_humidity;
+          sensorDs18b20.requestTemperature();
+        terminal.print("> tempBME[v0],tempPool[v5]: ");
+        terminal.print(tempBME);
+        terminal.print(",");
+        terminal.println(tempPool);
+        als = myAP3216.getAmbientLight();
+        prox = myAP3216.getProximity();
+        ir = myAP3216.getIRData(); // Ambient IR light
+        setluxrange(); //RANGE_20661 (default), RANGE_  RANGE_5162, RANGE_1291, RANGE_323
+        myAP3216.setMode(AP3216_ALS_PS_ONCE);
+        terminal.print(">als, prox, ir: ");
+        terminal.print(als);
+        terminal.print(",");
+        terminal.print(prox);
+        terminal.print(",");
+        terminal.println(ir);       
+    }
+    if (String("wets") == param.asStr()) {
+        terminal.print("> humBME[v3],abshumBME[v4]: ");
+        terminal.print(humBME);
+        terminal.print(",");
+        terminal.print(abshumBME);
+
+    }
+
+    if (String("heater") == param.asStr()) {
+        heater = !heater;
+      terminal.print("> Heater is now: ");
+      terminal.print(heater);
+    }
+  if (String("reset") == param.asStr()) {
+    terminal.println("Restarting...");
+    terminal.flush();
+    ESP.restart();
   }
-  else {
-    Serial.print("Error code: ");
-    Serial.println(httpResponseCode);
-  }
-  // Free resources
-  http.end();
 
-  return payload;
+  if (String("sen") == param.asStr()) {
+        getsen5x();
+        terminal.print("MassConcentrationPm1p0:");
+        terminal.print(massConcentrationPm1p0);
+        terminal.print("\t");
+        terminal.print("MassConcentrationPm2p5:");
+        terminal.print(massConcentrationPm2p5);
+        terminal.print("\t");
+        terminal.print("MassConcentrationPm4p0:");
+        terminal.print(massConcentrationPm4p0);
+        terminal.print("\t");
+        terminal.print("MassConcentrationPm10p0:");
+        terminal.print(massConcentrationPm10p0);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm0p5:");
+        terminal.print(numberConcentrationPm0p5);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm1p0:");
+        terminal.print(numberConcentrationPm1p0);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm2p5:");
+        terminal.print(numberConcentrationPm2p5);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm4p0:");
+        terminal.print(numberConcentrationPm4p0);
+        terminal.print("\t");
+        terminal.print("numberConcentrationPm10p0:");
+        terminal.print(numberConcentrationPm10p0);
+        terminal.print("\t");
+        terminal.print("typicalParticleSize:");
+        terminal.print(typicalParticleSize);
+        terminal.print("\t");
+        terminal.print("AmbientHumidity:");
+        if (isnan(ambientHumidity)) {
+            terminal.print("n/a");
+        } else {
+            terminal.print(ambientHumidity);
+        }
+        terminal.print("\t");
+        terminal.print("AmbientTemperature:");
+        if (isnan(ambientTemperature)) {
+            terminal.print("n/a");
+        } else {
+            terminal.print(ambientTemperature);
+        }
+        terminal.print("\t");
+        terminal.print("VocIndex:");
+        if (isnan(vocIndex)) {
+            terminal.print("n/a");
+        } else {
+            terminal.print(vocIndex);
+        }
+        terminal.print("\t");
+        terminal.print("NoxIndex:");
+        if (isnan(noxIndex)) {
+            terminal.println("n/a");
+        } else {
+            terminal.println(noxIndex);
+        }
+        terminal.print("Device Status: ");
+        uint16_t error;
+        char errorMessage[256];
+    uint32_t number = 21;
+    uint32_t* numberPtr = &number;
+         error = sen5x.readDeviceStatus(*numberPtr);
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+        terminal.println(number);
+  }
+    terminal.flush();
+
+}
+
+BLYNK_WRITE(V51){
+    float pinData = param.asFloat();
+    bridgedata = pinData; //bridgedata is pm25data
+}
+
+BLYNK_WRITE(V72){
+    float pinData = param.asFloat();
+    windbridgedata = pinData;
+    windmps = windbridgedata / 3.6;
+}
+
+float windgust;
+
+BLYNK_WRITE(V74){
+    float pinData = param.asFloat();
+  windgust = pinData;
+}
+
+BLYNK_WRITE(V73){
+    int pinData = param.asInt();
+  winddir = pinData;
+}
+
+String windDirection(int temp_wind_deg)   //Source http://snowfence.umn.edu/Components/winddirectionanddegreeswithouttable3.htm
+{
+  switch(temp_wind_deg){
+    case 0 ... 11:
+      return "N";
+      break;
+    case 12 ... 33:
+      return "NNE";
+      break;
+    case 34 ... 56:
+      return "NE";
+      break;
+    case 57 ... 78:
+      return "ENE";
+      break;
+    case 79 ... 101:
+      return "E";
+      break;
+    case 102 ... 123:
+      return "ESE";
+      break;
+    case 124 ... 146:
+      return "SE";
+      break;
+    case 147 ... 168:
+      return "SSE";
+      break;
+    case 169 ... 191:
+      return "S";
+      break;
+    case 192 ... 213:
+      return "SSW";
+      break;
+    case 214 ... 236:
+      return "SW";
+      break;
+    case 237 ... 258:
+      return "WSW";
+      break;
+    case 259 ... 281:
+      return "W";
+      break;
+    case 282 ... 303:
+      return "WNW";
+      break;
+    case 304 ... 326:
+      return "NW";
+      break;
+    case 327 ... 348:
+      return "NNW";
+      break;
+    case 349 ... 360:
+      return "N";
+      break;
+    default:
+      return "error";
+      break;
+  }
+}
+
+void printLocalTime()
+{
+  time_t rawtime;
+  struct tm * timeinfo;
+  time (&rawtime);
+  timeinfo = localtime (&rawtime);
+  terminal.print("-");
+  terminal.print(asctime(timeinfo));
+  terminal.println(" - ");
+  terminal.flush();
+}
+
+void handleTemperatureChange(int deviceIndex, int32_t temperatureRAW){
+  tempPool = sensorDs18b20.rawToCelsius(temperatureRAW);
+}
+
+void handleIntervalElapsed(int deviceIndex, int32_t temperatureRAW)
+{
+  tempPool = sensorDs18b20.rawToCelsius(temperatureRAW);
+}
+
+void handleDeviceDisconnected(int deviceIndex)
+{
+  //terminal.print(F("[NonBlockingDallas] handleDeviceDisconnected ==> deviceIndex="));
+  //terminal.print(deviceIndex);
+  //terminal.println(F(" disconnected."));
+  //printLocalTime();
+  //terminal.flush();
+}
+
+
+
+
+
+void setluxrange(){
+  if (luxrange == 4){
+    if (als < 5160) {luxrange--;}
+  }
+
+  if (luxrange == 3){
+    if (als > 5160) {luxrange++;}
+    if (als < 1289) {luxrange--;}
+  }
+
+  if (luxrange == 2){
+    if (als > 1289) {luxrange++;}
+    if (als < 321) {luxrange--;}
+  }
+
+  if (luxrange == 1){
+    if (als > 321) {luxrange++;}
+  }
+
+  if (als < 2) {luxrange = 1;}
+
+  if (luxrange == 4) {myAP3216.setLuxRange(RANGE_20661);} //RANGE_20661 (default), RANGE_  RANGE_5162, RANGE_1291, RANGE_323
+  if (luxrange == 3) {myAP3216.setLuxRange(RANGE_5162);}
+  if (luxrange == 2) {myAP3216.setLuxRange(RANGE_1291);}
+  if (luxrange == 1) {myAP3216.setLuxRange(RANGE_323);}
+}
+
+
+void updateDisplay(){
+      time_t now = time(NULL);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+
+  // Allocate a char array for the time string
+  char timeString[10]; // "12:34 PM" is 8 chars + null terminator
+
+  // Format the time string
+  if (timeinfo.tm_min < 10) {
+    snprintf(timeString, sizeof(timeString), "%d:0%d %s", timeinfo.tm_hour % 12 == 0 ? 12 : timeinfo.tm_hour % 12, timeinfo.tm_min, timeinfo.tm_hour < 12 ? "AM" : "PM");
+  } else {
+    snprintf(timeString, sizeof(timeString), "%d:%d %s", timeinfo.tm_hour % 12 == 0 ? 12 : timeinfo.tm_hour % 12, timeinfo.tm_min, timeinfo.tm_hour < 12 ? "AM" : "PM");
+  }
+
+    //display.clearScreen(); // use default for white
+        bool mirror_y = (display.epd2.panel != GxEPD2::GDE0213B1);
+
+  display.setTextColor(GxEPD_BLACK); //GxEPD_RED
+  display.firstPage();
+  //float tempBME = 24.24;
+  //float tempPool = 69.69;
+  do
+  {
+    display.fillScreen(GxEPD_WHITE);
+    display.setRotation(3);
+    //display.setPartialWindow(16, 16, display.width()-35, display.height()-50);
+    display.setFont(&Roboto_Condensed_12);
+    display.setTextColor(GxEPD_BLACK); //GxEPD_RED
+    display.setTextSize(1);
+    display.setCursor(20, 29);
+    display.print(pooltempchar);
+    display.setCursor(125, 29);
+    display.print(airtempchar);
+
+    display.setFont(&Open_Sans_Condensed_Bold_54);
+    display.setTextSize(1);
+    display.setCursor(130, 78);
+    display.print(tempBME,1);
+    display.setCursor(20, 78);
+    display.setTextColor(GxEPD_RED); //GxEPD_RED
+    display.print(tempPool,1);
+    //display.setPartialWindow(0, 100, 100, 50);
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(0, 114);
+    display.setTextColor(GxEPD_BLACK);
+    display.print(timeString);
+    //display.drawImage(Bitmap128x250_1, 0, 0, display.epd2.WIDTH, display.epd2.HEIGHT, false, !mirror_y, true);
+    display.setRotation(0);
+    display.drawInvertedBitmap(0, 0, Bitmap128x250_1, display.epd2.WIDTH, display.epd2.HEIGHT, GxEPD_BLACK);
+  }
+  while (display.nextPage());
+  display.hibernate();
+}
+
+
+void setup() {
+  tempPool = 69;
+  SPI.begin(HSPI_SCLK, HSPI_MISO, HSPI_MOSI);
+
+  display.init(115200,true,50,false);
+  display.setRotation(3);
+    //display.clearScreen(); // use default for white
+    //    bool mirror_y = (display.epd2.panel != GxEPD2::GDE0213B1);
+
+    //  display.firstPage();
+     // do
+      //{
+      //  display.fillScreen(GxEPD_WHITE);
+   //     display.drawImage(Bitmap128x250_1, 0, 0, display.epd2.WIDTH, display.epd2.HEIGHT, false, mirror_y, true);
+  //delay(60000);
+
+  pinMode(POOLTEMP_PIN, INPUT_PULLUP);
+  Serial.begin(9600);
+  myAP3216.init();
+  myAP3216.setLuxRange(RANGE_323); //myAP3216.setLuxRange(RANGE_20661);
+  myAP3216.setPSIntegrationTime(1);
+  myAP3216.setMode(AP3216_ALS_PS_ONCE);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.println("");
+sht4.begin();
+  sht4.setPrecision(SHT4X_HIGH_PRECISION);
+  sht4.setHeater(SHT4X_NO_HEATER);
+  // Wait for connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Hi! I am ESP32 weatherstationoutdoors.");
+  });
+
+  AsyncElegantOTA.begin(&server);    // Start ElegantOTA
+  server.begin();
+  Serial.println("HTTP server started");
+    Blynk.config(auth, IPAddress(192, 168, 50, 197), 8080);
+    Blynk.connect();
+  sensorDs18b20.begin(NonBlockingDallas::resolution_12, TIME_INTERVAL);
+  sensorDs18b20.onTemperatureChange(handleTemperatureChange);
+  sensorDs18b20.onIntervalElapsed(handleIntervalElapsed);
+  sensorDs18b20.onDeviceDisconnected(handleDeviceDisconnected);
+          sht4.getEvent(&humidity, &temp);
+          tempBME = temp.temperature;
+          humBME = humidity.relative_humidity;
+       configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    delay(250);
+    struct tm timeinfo;
+    getLocalTime(&timeinfo);
+    hours = timeinfo.tm_hour;
+    mins = timeinfo.tm_min;
+    secs = timeinfo.tm_sec;
+    Wire.begin();
+
+    sen5x.begin(Wire);
+
+    terminal.println("********************************");
+    terminal.println("BEGIN OUTDOOR WEATHER STATION v3.6");
+    terminal.print("Connected to: ");
+    terminal.println(WiFi.SSID());
+    terminal.print("IP address:");
+    terminal.println(WiFi.localIP());
+    terminal.print("Signal strength: ");
+    terminal.println(WiFi.RSSI());
+    printLocalTime();
+    uint16_t error;
+    char errorMessage[256];
+    error = sen5x.deviceReset();
+    if (error) {
+        terminal.print("Error trying to execute deviceReset(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    }
+    #ifdef USE_PRODUCT_INFO
+    printSerialNumber();
+    printModuleVersions();
+    #endif
+    float tempOffset = 0.0;
+    error = sen5x.setTemperatureOffsetSimple(tempOffset);
+    if (error) {
+        terminal.print("Error trying to execute setTemperatureOffsetSimple(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    } else {
+        terminal.print("Temperature Offset set to ");
+        terminal.print(tempOffset);
+        terminal.println(" deg. Celsius (SEN54/SEN55 only");
+    }
+    error = sen5x.startMeasurement();
+    if (error) {
+        terminal.print("Error trying to execute startMeasurement(): ");
+        errorToString(error, errorMessage, 256);
+        terminal.println(errorMessage);
+    }
+
+        sensorDs18b20.requestTemperature();
+        while (tempPool > 68) {
+          sensorDs18b20.update();
+        }
+        terminal.println("Busy while updating e-ink display, 15s.");
+        terminal.flush();
+          updateDisplay();
+          
 }
 
 BLYNK_CONNECTED() {
@@ -231,1008 +678,123 @@ BLYNK_CONNECTED() {
   bridge4.setAuthToken (remoteAuth4);
 }
 
-BLYNK_WRITE(V61){
-    float pinData = param.asFloat();
-    bridgedata = pinData;
+void getsen5x() {
+sen5x.readMeasuredValues(
+        massConcentrationPm1p0, massConcentrationPm2p5, massConcentrationPm4p0,
+        massConcentrationPm10p0, ambientHumidity, ambientTemperature, vocIndex,
+        noxIndex);
+  sen5x.readMeasuredPmValues(     massConcentrationPm1p0,  massConcentrationPm2p5,
+     massConcentrationPm4p0,  massConcentrationPm10p0,
+     numberConcentrationPm0p5,  numberConcentrationPm1p0,
+     numberConcentrationPm2p5,  numberConcentrationPm4p0,
+     numberConcentrationPm10p0,  typicalParticleSize);
 }
 
-BLYNK_WRITE(V62){
-    bridgetemp = param.asFloat();
-
-}
-
-BLYNK_WRITE(V63){
-    bridgehum = param.asFloat();
-
-}
-
-
-
-
-BLYNK_WRITE(V15)
-{
-   menuValue = param.asInt(); // assigning incoming value from pin V1 to a variable
-}
-
-BLYNK_WRITE(V16)
-{
-     zebraR = param[0].asInt();
-     zebraG = param[1].asInt();
-     zebraB = param[2].asInt();
-}
-
-
-void printValue(const byte &val) {
-  terminal.print(' ');
-  terminal.print(val);
-}
-
-
-
-/*BLYNK_WRITE(V35)
-{
-    redboost = param.asInt();
-}*/
-
-void printData() {
-  sensorcount++;
-  if (sensor.presenceDetected()) {
-    anydistance += sensor.detectedDistance();
-  }
-  if (sensor.movingTargetDetected()) {
-    movingsignal += sensor.movingTargetSignal();
-    movingdistance += sensor.movingTargetDistance();
-  }
-  if (sensor.stationaryTargetDetected()) {
-    stasignal += sensor.stationaryTargetSignal();
-    stadistance += sensor.stationaryTargetDistance();
-  }
-}
-
-void termData() {
-  //sensorcount++;
-  terminal.print(sensor.statusString());
-  if (sensor.presenceDetected()) {
-    terminal.print(", distance: ");
-    terminal.print(sensor.detectedDistance());
-    //anydistance += sensor.detectedDistance();
-    terminal.print("cm");
-  }
-  terminal.println();
-  if (sensor.movingTargetDetected()) {
-    terminal.print(" MOVING    = ");
-    //movingsignal += sensor.movingTargetSignal();
-    terminal.print(sensor.movingTargetSignal());
-    terminal.print("@");
-    //movingdistance += sensor.movingTargetDistance();
-    terminal.print(sensor.movingTargetDistance());
-    terminal.print("cm ");
-    if (sensor.inEnhancedMode()) {
-      terminal.print("\n signals->[");
-      sensor.getMovingSignals().forEach(printValue);
-      terminal.print(" ] thresholds:[");
-      sensor.getMovingThresholds().forEach(printValue);
-      terminal.print(" ]");
-    }
-    terminal.println();
-  }
-  if (sensor.stationaryTargetDetected()) {
-    terminal.print(" STATIONARY= ");
-    //stasignal += sensor.stationaryTargetSignal();
-    terminal.print(sensor.stationaryTargetSignal());
-    terminal.print("@");
-    //stadistance += sensor.stationaryTargetDistance();
-    terminal.print(sensor.stationaryTargetDistance());
-    terminal.print("cm ");
-    if (sensor.inEnhancedMode()) {
-      terminal.print("\n signals->[");
-      sensor.getStationarySignals().forEach(printValue);
-      terminal.print(" ] thresholds:[");
-      sensor.getStationaryThresholds().forEach(printValue);
-      terminal.print(" ]");
-    }
-    terminal.println();
-  }
-  byte lightLevel = sensor.getLightLevel();
-  if (lightLevel) {
-    terminal.print("Light level: ");
-    terminal.println(lightLevel);
-  }
-  terminal.println();
-  terminal.flush();
-}
-
-
-void printLocalTime()
-{
-  time_t rawtime;
-  struct tm * timeinfo;
-  time (&rawtime);
-  timeinfo = localtime (&rawtime);
-  terminal.print(asctime(timeinfo));
-  terminal.flush();
-}
-
-bool heater = false;
-
-BLYNK_WRITE(V14)
-{
-    if (String("help") == param.asStr()) 
-    {
-    terminal.println("==List of available commands:==");
-    terminal.println("wifi");
-    terminal.println("temps");
-    terminal.println("wets");
-    terminal.println("particles");
-    terminal.println("bsec");
-    terminal.println("rapidon");
-    terminal.println("rapidoff");
-    terminal.println("heater");
-    terminal.println("erase");
-    terminal.println("recal");
-    terminal.println("scd");
-    terminal.println("weather");
-    terminal.println("ld");
-    
-     terminal.println("==End of list.==");
-    }
-        if (String("wifi") == param.asStr()) 
-    {
-        terminal.print("Connected to: ");
-        terminal.println(WiFi.SSID());
-        terminal.print("IP address:");
-        terminal.println(WiFi.localIP());
-        terminal.print("Signal strength: ");
-        terminal.println(WiFi.RSSI());
-        printLocalTime();
-    }
-        if (String("weather") == param.asStr()) 
-    {
-        jsonBuffer = httpGETRequest(url);
-        JSONVar myObject = JSON.parse(jsonBuffer);
-        if (JSON.typeof(myObject) != "undefined") {
-                     inettemp = double(myObject["current"]["temp_c"]);
-                     inetwind = double(myObject["current"]["wind_kph"]);
-                     inetwinddir = double(myObject["current"]["wind_degree"]);
-                     inetgust = double(myObject["current"]["gust_kph"]);
-        }  
-        terminal.print("Internet temp: ");
-        terminal.println(inettemp);
-        terminal.print("Internet Wind: ");
-        terminal.println(inetwind);
-        terminal.print("Internet Wind Dir: ");
-        terminal.println(inetwinddir);
-        terminal.print("Internet Wind Gust: ");
-        terminal.println(inetgust);
-    }
-
-    if (String("temps") == param.asStr()) {
-          //sht4.getEvent(&humidity, &temp);
-         // tempSHT = temp.temperature;
-         // humSHT = humidity.relative_humidity;
-        terminal.print("tempBME[v0],tempPool[v5],humidex[v31],dewpoint[v2]: ");
-        terminal.print(tempBME);
-        terminal.print(",,,");
-        terminal.print(humidex);
-        terminal.print(",,,");
-        terminal.print(dewpoint);
-        terminal.print(", tempSHT =");
-        terminal.print(tempSHT);
-        terminal.print(", humSHT =");
-        terminal.print(humSHT);
-        terminal.print(", tempSCD =");
-        terminal.print(tempSCD);
-        terminal.print(", humSCD =");
-        terminal.print(humSCD);
-        terminal.print(", CO2 =");
-        terminal.print(co2SCD);
-        terminal.flush();
-    }
-    if (String("wets") == param.asStr()) {
-        terminal.print("humBME[v3],abshumBME[v4],presBME[v1],gasBME[v7]: ");
-        terminal.print(humBME);
-        terminal.print(",,,");
-        terminal.print(abshumBME);
-        terminal.print(",,,");
-        terminal.print(presBME);
-        terminal.print(",,,");
-        terminal.println(gasBME);
-    }
-    if (String("particles") == param.asStr()) {
-
-
-        sprintf(output, "\nSensor Version: %d    Error Code: %d\n",
-                      pms7003.getHWVersion(),
-                      pms7003.getErrorCode());
-        terminal.print(output);
-
-        sprintf(output, "    PM1.0 (ug/m3): %2d     [atmos: %d]\n",
-                      pms7003.getPM_1_0(),
-                      pms7003.getPM_1_0_atmos());              
-        terminal.print(output);
-        sprintf(output, "    PM2.5 (ug/m3): %2d     [atmos: %d]\n",
-                      pms7003.getPM_2_5(),
-                      pms7003.getPM_2_5_atmos());
-        terminal.print(output);
-        sprintf(output, "    PM10  (ug/m3): %2d     [atmos: %d]\n",
-                      pms7003.getPM_10_0(),
-                      pms7003.getPM_10_0_atmos());              
-        terminal.print(output);
-
-        sprintf(output, "\n    RAW: %2d[>0.3] %2d[>0.5] %2d[>1.0] %2d[>2.5] %2d[>5.0] %2d[>10]\n",
-                      pms7003.getRawGreaterThan_0_3(),
-                      pms7003.getRawGreaterThan_0_5(),
-                      pms7003.getRawGreaterThan_1_0(),
-                      pms7003.getRawGreaterThan_2_5(),
-                      pms7003.getRawGreaterThan_5_0(),
-                      pms7003.getRawGreaterThan_10_0());
-        terminal.print(output);
-      
-
-    }
-    if (String("bsec") == param.asStr()) {
-        terminal.print("bmeiaq[v23],bmeiaqAccuracy[v24],bmestaticIaq[v25],bmeco2Equivalent[v26],bmebreathVocEquivalent[v27],bmestabStatus[v28],bmerunInStatus[v29],bmegasPercentage[v30]:");
-        terminal.print(bmeiaq);
-        terminal.print(",,,");
-        terminal.print(bmeiaqAccuracy);
-        terminal.print(",,,");
-        terminal.print(bmestaticIaq);
-        terminal.print(",,,");
-        terminal.print(bmeco2Equivalent);
-        terminal.print(",,,");
-        terminal.print(bmebreathVocEquivalent);
-        terminal.print(",,,");
-        terminal.print(bmestabStatus);
-        terminal.print(",,,");
-        terminal.print(bmerunInStatus);
-        terminal.print(",,,");
-        terminal.println(bmegasPercentage);
-    }
-
-    if (String("rapidon") == param.asStr()) {
-        blynkWait = 50;
-    }
-
-    if (String("rapidoff") == param.asStr()) {
-      blynkWait = 30000;
-    }
-
-    if (String("heater") == param.asStr()) {
-        heater = !heater;
-  
-      terminal.print("> Heater is now: ");
-      terminal.print(heater);
-    }
-    if (String("erase") == param.asStr()) {
-      terminal.println("Erasing EEPROM");
-
-      for (uint8_t i = 0; i <= BSEC_MAX_STATE_BLOB_SIZE; i++)
-      EEPROM.write(i, 0);
-
-      EEPROM.commit();
-      terminal.flush();
-    }
-    if (String("recal") == param.asStr()) {
-      if (!scd30.forceRecalibrationWithReference(420)){
-        terminal.println("Failed to force recalibration with reference");
-      }
-      else {terminal.println("> Recalibrated CO2 sensor.");}
-      terminal.flush();
-    }
-    if (String("scd") == param.asStr()) {
-      if (!scd30.startContinuousMeasurement(int(presBME))){
-        terminal.println("Failed to set ambient pressure offset");
-        terminal.flush();
-      }
-      terminal.print("Measurement interval: ");
-      terminal.print(scd30.getMeasurementInterval());
-      terminal.println(" seconds");
-      terminal.print("Ambient pressure offset: ");
-      terminal.print(scd30.getAmbientPressureOffset());
-      terminal.println(" mBar");
-      terminal.print("Temperature offset: ");
-      terminal.print((float)scd30.getTemperatureOffset()/100.0);
-      terminal.println(" degrees C");
-      terminal.print("Forced Recalibration reference: ");
-      terminal.print(scd30.getForcedCalibrationReference());
-      terminal.println(" ppm");
-      terminal.flush();
-    }
-
-
-  if (String("ld") == param.asStr()) {
-  terminal.print("Max range CH20: ");
-  terminal.println(ch2o.getFullRange());
-  terminal.print("Last CH20 reading: ");
-  terminal.println(lastReading);
-      termData();
-  }
-terminal.flush();
-}
-
-void errLeds(void)
-{
-    //while(1)
-    //{
-        leds[0] = CRGB(100, 0, 0);
-        FastLED.show();
-        delay(ERROR_DUR);
-        leds[0] = CRGB(0, 0, 0);
-        FastLED.show();
-        delay(ERROR_DUR);
-    //}
-}
-
-void updateBsecState(Bsec2 bsec)
-{
-    static uint16_t stateUpdateCounter = 0;
-    bool update = false;
-
-    if (!stateUpdateCounter || (stateUpdateCounter * STATE_SAVE_PERIOD) < millis())
-    {
-        /* Update every STATE_SAVE_PERIOD minutes */
-        update = true;
-        stateUpdateCounter++;
-    }
-
-    if (update && !saveState(bsec))
-        checkBsecStatus(bsec);
-}
-
-void newDataCallback(const bme68xData data, const bsecOutputs outputs, Bsec2 bsec)
-{
-    if (!outputs.nOutputs)
-        return;
-
-    Serial.println("BSEC outputs:\n\ttimestamp = " + String((int) (outputs.output[0].time_stamp / INT64_C(1000000))));
-    for (uint8_t i = 0; i < outputs.nOutputs; i++)
-    {
-        const bsecData output  = outputs.output[i];
-        switch (output.sensor_id)
-        {
-            case BSEC_OUTPUT_RAW_GAS:
-                gasBME = (1 / (output.signal / 1000.0)) * 10;
-                break;
-            case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE:
-                tempBME = output.signal;
-                break;
-            case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY:
-                humBME = output.signal;
-                break;
-            case BSEC_OUTPUT_IAQ:
-            bmeiaq = output.signal;
-            bmeiaqAccuracy = output.accuracy;
-                break;
-            case BSEC_OUTPUT_STATIC_IAQ:
-            bmestaticIaq = output.signal;
-                break;
-            case BSEC_OUTPUT_CO2_EQUIVALENT:
-            bmeco2Equivalent = output.signal;
-                break;
-            case BSEC_OUTPUT_BREATH_VOC_EQUIVALENT:
-            bmebreathVocEquivalent = output.signal;
-                break;
-            case BSEC_OUTPUT_RAW_PRESSURE:
-            presBME = (output.signal / 100.0);
-                break;
-            case BSEC_OUTPUT_STABILIZATION_STATUS:
-            bmestabStatus = output.signal;
-                break;
-            case BSEC_OUTPUT_RUN_IN_STATUS:
-            bmerunInStatus = output.signal;
-                break;
-            case BSEC_OUTPUT_GAS_PERCENTAGE:
-            bmegasPercentage = output.signal;
-                break;
-
-            default:
-                break;
-        }
-    }
-
-    updateBsecState(envSensor);
-}
-
-void checkBsecStatus(Bsec2 bsec)
-{
-    if (bsec.status < BSEC_OK)
-    {
-        Serial.println("BSEC error code : " + String(bsec.status));
-        errLeds(); /* Halt in case of failure */
-    } else if (bsec.status > BSEC_OK)
-    {
-        Serial.println("BSEC warning code : " + String(bsec.status));
-    }
-
-    if (bsec.sensor.status < BME68X_OK)
-    {
-        Serial.println("BME68X error code : " + String(bsec.sensor.status));
-        errLeds(); /* Halt in case of failure */
-    } else if (bsec.sensor.status > BME68X_OK)
-    {
-        Serial.println("BME68X warning code : " + String(bsec.sensor.status));
-    }
-}
-
-bool loadState(Bsec2 bsec)
-{
-#ifdef USE_EEPROM
-    
-
-    if (EEPROM.read(0) == BSEC_MAX_STATE_BLOB_SIZE)
-    {
-        /* Existing state in EEPROM */
-        terminal.println("Reading state from EEPROM");
-        terminal.print("State file: ");
-        for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE; i++)
-        {
-            bsecState[i] = EEPROM.read(i + 1);
-            terminal.print(String(bsecState[i], HEX));
-        }
-        terminal.println();
-
-        if (!bsec.setState(bsecState))
-            return false;
-    } else
-    {
-        /* Erase the EEPROM with zeroes */
-        terminal.println("Erasing EEPROM");
-
-        for (uint8_t i = 0; i <= BSEC_MAX_STATE_BLOB_SIZE; i++)
-            EEPROM.write(i, 0);
-
-        EEPROM.commit();
-        terminal.flush();
-    }
-#endif
-    return true;
-}
-
-bool saveState(Bsec2 bsec)
-{
-#ifdef USE_EEPROM
-    if (!bsec.getState(bsecState))
-        return false;
-
-    terminal.println("Writing state to EEPROM");
-    printLocalTime();
-    terminal.print("State file: ");
-
-    for (uint8_t i = 0; i < BSEC_MAX_STATE_BLOB_SIZE; i++)
-    {
-        EEPROM.write(i + 1, bsecState[i]);
-        terminal.print(String(bsecState[i], HEX));
-    }
-    terminal.println();
-    terminal.flush();
-    EEPROM.write(0, BSEC_MAX_STATE_BLOB_SIZE);
-    EEPROM.commit();
-#endif
-    return true;
-}
-
-void readPMS() {
-    if (pms7003.hasNewData()) {
-        new1p0 = pms7003.getPM_1_0();
-        new2p5 = pms7003.getPM_2_5();
-        new10 = pms7003.getPM_10_0();
-
-        pm1Avg.push(new1p0);
-        pm25Avg.push(new2p5);
-        pm10Avg.push(new10);
-
-        new1p0a = pms7003.getPM_1_0_atmos(); 
-        new2p5a = pms7003.getPM_2_5_atmos();
-        new10a = pms7003.getPM_10_0_atmos();
-        pm1aAvg.push(new1p0a);
-        pm25aAvg.push(new2p5a);
-        pm10aAvg.push(new10a);
-   
-       up3 = pms7003.getRawGreaterThan_0_3();
-       up5 = pms7003.getRawGreaterThan_0_5();
-       up10 = pms7003.getRawGreaterThan_1_0();
-       up25 = pms7003.getRawGreaterThan_2_5();
-       up50 = pms7003.getRawGreaterThan_5_0();
-       up100 = pms7003.getRawGreaterThan_10_0();
-  }
-}
-
-void setup() {
-  setCpuFrequencyMhz(80);
-  pinMode(BUTTON_PIN, INPUT_PULLUP); //BUTTON PIN
-  delay(2);
-  if (digitalRead(BUTTON_PIN) == HIGH){ buttonstart = true;}
-  pinMode(0, INPUT_PULLUP);
-  pinMode(2, INPUT_PULLUP);
-  //pinMode(5, INPUT_PULLUP);  //VSPI pins commented out
-  pinMode(14, INPUT_PULLUP);
-  pinMode(13, INPUT_PULLUP);
-  pinMode(12, INPUT_PULLUP);
-  for(int i=15; i<=17; i++) {
-    pinMode(i, INPUT_PULLUP);
-  }
-  //pinMode(23, INPUT_PULLUP);
-  pinMode(25, INPUT_PULLUP);
-  pinMode(26, INPUT_PULLUP);
-  pinMode(27, INPUT_PULLUP);
-  for(int i=32; i<=36; i++) {
-    pinMode(i, INPUT_PULLUP);
-  }
-
-  Serial.begin(9600);
-  Serial1.begin(9600, SERIAL_8N1, 3, 1);
-  MySerial1.begin(9600);
-  Serial2.begin(LD2410_BAUD_RATE);
-  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
-    Serial.println("");
-    Wire.begin();
-
-    sht4x.begin(Wire, SHT40_I2C_ADDR_44);
-    sgp41.begin(Wire);
-
-  pms7003.init(&Serial1);
-  WiFi.mode(WIFI_STA);
-  WiFiManager wm;
-
-  if ((buttonstart) || !wm.getWiFiIsSaved()){
-    nvs_flash_erase(); // erase the NVS partition and...
-    nvs_flash_init(); // initialize the NVS partition.
-    wm.resetSettings();
-    
-    leds[0] = CRGB(100, 100, 100);
-    FastLED.show();
-    delay(250);
-    leds[0] = CRGB(0, 0, 0);
-    FastLED.show();
-    delay(250);
-    leds[0] = CRGB(100, 100, 100);
-    FastLED.show();
-    delay(1000);
-    leds[0] = CRGB(0, 0, 0);
-    FastLED.show();
-    bool res;
-    // res = wm.autoConnect(); // auto generated AP name from chipid
-    // res = wm.autoConnect("AutoConnectAP"); // anonymous ap
-    res = wm.autoConnect("JoesWeather"); // password protected ap
-
-    if(!res) {
-        leds[0] = CRGB(100, 0, 0);
-        FastLED.show();
-        delay(250);
-        leds[0] = CRGB(0, 0, 0);
-        FastLED.show();
-        delay(250);
-        leds[0] = CRGB(100, 0, 0);
-        FastLED.show();
-        delay(1000);
-        leds[0] = CRGB(0, 0, 0);
-        FastLED.show();
-        delay(3000);
-        ESP.restart();
-    } 
-    else {
-        //if you get here you have connected to the WiFi    
-        leds[0] = CRGB(0, 100, 0);
-        FastLED.show();
-        delay(250);
-        leds[0] = CRGB(0, 0, 0);
-        FastLED.show();
-        delay(250);
-        leds[0] = CRGB(0, 100, 0);
-        FastLED.show();
-        delay(1000);
-        leds[0] = CRGB(0, 0, 0);
-        FastLED.show();
-    }
-  }
-  else {
-    WiFi.begin(wm.getWiFiSSID(), wm.getWiFiPass());
-    while (WiFi.status() != WL_CONNECTED) {
-      leds[0] = CRGB(100, 100, 0);
-      FastLED.show();
-      delay(250);
-      leds[0] = CRGB(0, 0, 0);
-      FastLED.show();
-      delay(250);
-      Serial.print(".");
-    }
-
-  }
-
-
-
-
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    delay(250);
-    struct tm timeinfo;
-    getLocalTime(&timeinfo);
-    hours = timeinfo.tm_hour;
-    mins = timeinfo.tm_min;
-    secs = timeinfo.tm_sec;
-  ArduinoOTA.setHostname("WSBedroomESP");
-    
-    
-  ArduinoOTA.begin();
-    Serial.println("HTTP server started");
-      Blynk.config(auth, IPAddress(216, 110, 224, 105), 8080);
-    Blynk.connect();
-  
-          //sht4.getEvent(&humidity, &temp);
-         // tempSHT = temp.temperature;
-       //   humSHT = humidity.relative_humidity;
-
-
-  bsecSensor sensorList[13] = {
-  BSEC_OUTPUT_IAQ,
-  BSEC_OUTPUT_STATIC_IAQ,
-  BSEC_OUTPUT_CO2_EQUIVALENT,
-  BSEC_OUTPUT_BREATH_VOC_EQUIVALENT,
-  BSEC_OUTPUT_RAW_TEMPERATURE,
-  BSEC_OUTPUT_RAW_PRESSURE,
-  BSEC_OUTPUT_RAW_HUMIDITY,
-  BSEC_OUTPUT_RAW_GAS,
-  BSEC_OUTPUT_STABILIZATION_STATUS,
-  BSEC_OUTPUT_RUN_IN_STATUS,
-  BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
-  BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY,
-  BSEC_OUTPUT_GAS_PERCENTAGE
-  };
-
-  #ifdef USE_EEPROM
-   EEPROM.begin(BSEC_MAX_STATE_BLOB_SIZE + 1);
-  #endif
-  Wire.begin();
-  //pinMode(PANIC_LED, OUTPUT);
-
-  /* Valid for boards with USB-COM. Wait until the port is open */
-  while (!Serial) delay(10);
-  
-  /* Initialize the library and interfaces */
-  if (!envSensor.begin(BME68X_I2C_ADDR_LOW, Wire))
-  {
-      checkBsecStatus(envSensor);
-  }
-
-  /* Load the configuration string that stores information on how to classify the detected gas */
-  if (!envSensor.setConfig(bsec_config_iaq))
-  {
-      checkBsecStatus (envSensor);
-  }
-
-  /* Copy state from the EEPROM to the algorithm */
-  if (!loadState(envSensor))
-  {
-      checkBsecStatus (envSensor);
-  }
-
-  /* Subscribe for the desired BSEC2 outputs */
-  if (!envSensor.updateSubscription(sensorList, 13, BSEC_SAMPLE_RATE_LP))
-  {
-      checkBsecStatus (envSensor);
-  }
-
-  /* Whenever new data is available call the newDataCallback function */
-  envSensor.setTemperatureOffset(5.0);
-  envSensor.attachCallback(newDataCallback);
-
-  String output = "\nBSEC library version " + String(envSensor.version.major) + "." + String(envSensor.version.minor) + "." + String(envSensor.version.major_bugfix) + "." + String(envSensor.version.minor_bugfix);
-    terminal.println("----------------------------------");
-    terminal.println("STARTING BEDROOM BLYNK SERVER v2.2");
-    terminal.println(output);
-    printLocalTime(); //print current time to Blynk terminal
-    terminal.println("----------------------------------");
-    // terminal.println("Found SHT4x sensor");
-    //terminal.print("terminal number 0x");
-    // terminal.println(sht4.readSerial(), HEX);
-    terminal.println("Type 'help' for a list of commands");
-    terminal.flush();
-  
-
-  if (!scd30.begin()) {
-    terminal.println("Failed to find SCD30 chip");
-    terminal.flush();
-  }
-  else
-  {
-    scd30.setTemperatureOffset(SCD_OFFSET); // subtract 2 degrees
-    terminal.print("Measurement interval: ");
-    terminal.print(scd30.getMeasurementInterval());
-    terminal.println(" seconds");
-    terminal.print("Ambient pressure offset: ");
-    terminal.print(scd30.getAmbientPressureOffset());
-    terminal.println(" mBar");
-    terminal.print("Temperature offset: ");
-    terminal.print((float)scd30.getTemperatureOffset()/100.0);
-    terminal.println(" degrees C");
-    terminal.print("Forced Recalibration reference: ");
-    terminal.print(scd30.getForcedCalibrationReference());
-    terminal.println(" ppm");
-
-
-    int32_t index_offset;
-    int32_t learning_time_offset_hours;
-    int32_t learning_time_gain_hours;
-    int32_t gating_max_duration_minutes;
-    int32_t std_initial;
-    int32_t gain_factor;
-    voc_algorithm.get_tuning_parameters(
-        index_offset, learning_time_offset_hours, learning_time_gain_hours,
-        gating_max_duration_minutes, std_initial, gain_factor);
-
-    terminal.println("\nVOC Gas Index Algorithm parameters");
-    terminal.print("Index offset:\t");
-    terminal.println(index_offset);
-    terminal.print("Learning time offset hours:\t");
-    terminal.println(learning_time_offset_hours);
-    terminal.print("Learning time gain hours:\t");
-    terminal.println(learning_time_gain_hours);
-    terminal.print("Gating max duration minutes:\t");
-    terminal.println(gating_max_duration_minutes);
-    terminal.print("Std inital:\t");
-    terminal.println(std_initial);
-    terminal.print("Gain factor:\t");
-    terminal.println(gain_factor);
-
-    nox_algorithm.get_tuning_parameters(
-        index_offset, learning_time_offset_hours, learning_time_gain_hours,
-        gating_max_duration_minutes, std_initial, gain_factor);
-
-    terminal.println("\nNOx Gas Index Algorithm parameters");
-    terminal.print("Index offset:\t");
-    terminal.println(index_offset);
-    terminal.print("Learning time offset hours:\t");
-    terminal.println(learning_time_offset_hours);
-    terminal.print("Gating max duration minutes:\t");
-    terminal.println(gating_max_duration_minutes);
-    terminal.print("Gain factor:\t");
-    terminal.println(gain_factor);
-    terminal.println("");
-    
-    
-    sht4x.measureHighPrecision(temperature, humidity);
-            tempSHT = temperature;
-        humSHT = humidity;
-        compensationT = static_cast<uint16_t>((tempSHT + 45) * 65535 / 175);
-        compensationRh = static_cast<uint16_t>(humSHT * 65535 / 100);
-  }
-    if (!sensor.begin()) {
-        terminal.println("Failed to communicate with LD2410 sensor.");
-    } 
-    else {
-      terminal.println("Connected to LD2410 sensor! :)");
-    }
-    
-    terminal.flush();
-}
 
 void loop() {
-
-
-
-  if (digitalRead(BUTTON_PIN) == HIGH){ //button is normally closed, pressed open
-    every(100){
-      buttonpressed = !buttonpressed;
-    }
-  }
-  every(200){
-      Ze08CH2O::concentration_t reading;
-    if (ch2o.read(reading)) {
-      Serial.print("New CH20 value: ");
-      Serial.println(reading);
-      lastReading = reading;
-    }
-  }
-
-  every(1000){
-          if (sensor.check() == MyLD2410::Response::DATA) {
-            printData();
-          }
-          else {
-            terminal.println("Failed to communicate with LD2410 sensor.");
-            terminal.flush();
-          }
-    // 3. Measure SGP4x signals
-    if (conditioning_s > 0) {
-        // During NOx conditioning (10s) SRAW NOx will remain 0
-        error =
-            sgp41.executeConditioning(compensationRh, compensationT, srawVoc);
-        conditioning_s--;
-    } else {
-        error = sgp41.measureRawSignals(compensationRh, compensationT, srawVoc,
-                                        srawNox);
-    }
-
-    // 4. Process raw signals by Gas Index Algorithm to get the VOC and NOx
-    // index
-    //    values
-    if (error) {
-        terminal.print("SGP41 - Error trying to execute measureRawSignals(): ");
-        errorToString(error, errorMessage, 256);
-        terminal.println(errorMessage);
-        terminal.flush();
-    } else {
-         voc_index = voc_algorithm.process(srawVoc);
-         nox_index = nox_algorithm.process(srawNox);
-    }
-  }
-
-  every (15000){
-         error = sht4x.measureHighPrecision(temperature, humidity);
-    if (error) {
-        terminal.print(
-            "SHT4x - Error trying to execute measureHighPrecision(): ");
-        errorToString(error, errorMessage, 256);
-        terminal.println(errorMessage);
-        terminal.println("Fallback to use default values for humidity and "
-                       "temperature compensation for SGP41");
-        compensationRh = defaultCompenstaionRh;
-        compensationT = defaultCompenstaionT;
-        terminal.flush();
-    } else {
-        tempSHT = temperature;
-        humSHT = humidity;
-        // convert temperature and humidity to ticks as defined by SGP41
-        // interface
-        // NOTE: in case you read RH and T raw signals check out the
-        // ticks specification in the datasheet, as they can be different for
-        // different sensors
-        compensationT = static_cast<uint16_t>((tempSHT + 45) * 65535 / 175);
-        compensationRh = static_cast<uint16_t>(humSHT * 65535 / 100);
-    }
-
-  }
-
-  if (scd30.dataReady()) {
-        if (!scd30.read()){ 
-      terminal.println("Error reading CO2 sensor data"); 
-      return; 
-    }
-    tempSCD = scd30.temperature;
-    humSCD = scd30.relative_humidity;
-    co2SCD = scd30.CO2;
-  }
-
-  every (120000)
-  {
-       if (!scd30.startContinuousMeasurement(int(presBME))){
-     terminal.println("Failed to set ambient pressure offset");
-     terminal.flush();
-
-   }
-  }
-
-
-
-  if (!envSensor.run()) {
-      checkBsecStatus (envSensor);
-  }
-
-  pms7003.updateFrame();
-  readPMS();
-
-  if (WiFi.status() == WL_CONNECTED) {Blynk.run();} 
-
-  if  (millis() - millisAvg >= 3000)  //if it's been 3 second
+  sensorDs18b20.update();
+    if (WiFi.status() == WL_CONNECTED) {Blynk.run();}  // put your main code here, to run repeatedly:
+    if  (millis() - millisAvg >= 2000)  //if it's been 1 second
     {
-
         wifiAvg.push(WiFi.RSSI());
-
         millisAvg = millis();
+
     }
 
-  if  ((millis() - millisBlynk >= blynkWait)) //if it's been blynkWait seconds 
+    if  (millis() - millisBlynk >= 30000)  //if it's been 30 seconds 
     {
-          //sht4.getEvent(&humidity, &temp);
-         // tempSHT = temp.temperature;
-        //  humSHT = humidity.relative_humidity;
-        batteryVolts = analogReadMilliVolts(ADC_PIN) / 500.0;
         millisBlynk = millis();
-        abshumBME = (6.112 * pow(2.71828, ((17.67 * tempBME)/(tempBME + 243.5))) * humBME * 2.1674)/(273.15 + tempBME);
-        abshumSHT = (6.112 * pow(2.71828, ((17.67 * tempSHT)/(tempSHT + 243.5))) * humSHT * 2.1674)/(273.15 + tempSHT);
-        abshumSCD = (6.112 * pow(2.71828, ((17.67 * tempSCD)/(tempSCD + 243.5))) * humSCD * 2.1674)/(273.15 + tempSCD);
+        sensorDs18b20.requestTemperature();
+        als = myAP3216.getAmbientLight();
+        prox = myAP3216.getProximity();
+        ir = myAP3216.getIRData(); // Ambient IR light
+        setluxrange();
+        myAP3216.setMode(AP3216_ALS_PS_ONCE);
+        getsen5x();
+
+          sht4.getEvent(&humidity, &temp);
+          tempBME = temp.temperature;
+          humBME = humidity.relative_humidity;
+        abshumBME = (6.112 * pow(2.71828, ((17.67 * tempBME)/(tempBME + 243.5))) * humBME * 2.1674)/(273.15 + tempBME); //calculate absolute humidity
+        abshumSEN = (6.112 * pow(2.71828, ((17.67 * ambientTemperature)/(ambientTemperature + 243.5))) * ambientHumidity * 2.1674)/(273.15 + ambientTemperature); //calculate absolute humidity
         dewpoint = tempBME - ((100 - humBME)/5); //calculate dewpoint
         humidex = tempBME + 0.5555 * (6.11 * pow(2.71828, 5417.7530*( (1/273.16) - (1/(273.15 + dewpoint)) ) ) - 10); //calculate humidex using Environment Canada formula
-        dewpointSHT = tempSHT - ((100 - humSHT)/5); //calculate dewpoint
-        humidexSHT = tempSHT + 0.5555 * (6.11 * pow(2.71828, 5417.7530*( (1/273.16) - (1/(273.15 + dewpoint)) ) ) - 10); //calculate humidex using Environment Canada formula
-        jsonBuffer = httpGETRequest(url);
-        JSONVar myObject = JSON.parse(jsonBuffer);
-              if (JSON.typeof(myObject) != "undefined") {
-                     inettemp = double(myObject["current"]["temp_c"]);
-                     inetwind = double(myObject["current"]["wind_kph"]);
-                     inetwinddir = double(myObject["current"]["wind_degree"]);
-                     inetgust = double(myObject["current"]["gust_kph"]);
-        }  
-        Blynk.virtualWrite(V51, inettemp);
-        Blynk.virtualWrite(V52, inetwind);
-        Blynk.virtualWrite(V53, inetwinddir);
-        Blynk.virtualWrite(V54, inetgust);
-        bridge4.virtualWrite(V71, inettemp);
-        bridge4.virtualWrite(V72, inetwind);
-        bridge4.virtualWrite(V73, inetwinddir);
-        bridge4.virtualWrite(V74, inetgust);
+        windchill  = 13.12 + (0.6215*tempBME) - (11.37*pow(windbridgedata,0.16)) + (0.3965*tempBME*pow(windbridgedata,0.16));
         if ((tempBME <= 0) && (humBME <= 0)) {}
         else {
-        Blynk.virtualWrite(V1, presBME);
-        Blynk.virtualWrite(V2, tempBME);
-        Blynk.virtualWrite(V3, humBME);
-        Blynk.virtualWrite(V4, abshumBME);
-        Blynk.virtualWrite(V31, humidex);
-        Blynk.virtualWrite(V32, dewpoint);
+          Blynk.virtualWrite(V0, tempBME);
+          Blynk.virtualWrite(V1, presBME);
+          Blynk.virtualWrite(V2, dewpoint);
+          Blynk.virtualWrite(V3, humBME);
+          Blynk.virtualWrite(V4, abshumBME);
+/*ambientHumidity, ambientTemperature, vocIndex,
+   massConcentrationPm1p0,  massConcentrationPm2p5,
+     massConcentrationPm4p0,  massConcentrationPm10p0,
+     numberConcentrationPm0p5,  numberConcentrationPm1p0,
+     numberConcentrationPm2p5,  numberConcentrationPm4p0,
+     numberConcentrationPm10p0,  typicalParticleSize*/
+          Blynk.virtualWrite(V8,massConcentrationPm1p0);
+          Blynk.virtualWrite(V9, massConcentrationPm2p5);
+          Blynk.virtualWrite(V10, massConcentrationPm10p0);
+          Blynk.virtualWrite(V11, massConcentrationPm4p0);
+          Blynk.virtualWrite(V12, numberConcentrationPm0p5);
+          Blynk.virtualWrite(V13, numberConcentrationPm1p0);
+          Blynk.virtualWrite(V14, numberConcentrationPm2p5);
+          Blynk.virtualWrite(V15, numberConcentrationPm4p0);
+          Blynk.virtualWrite(V16, numberConcentrationPm10p0);
+          Blynk.virtualWrite(V22, typicalParticleSize);
+          Blynk.virtualWrite(V23, ambientTemperature);
+          Blynk.virtualWrite(V24, ambientHumidity);
+          Blynk.virtualWrite(V25, vocIndex);
+          Blynk.virtualWrite(V26, abshumSEN);
+
+          Blynk.virtualWrite(V17, humidex);
+          bridge1.virtualWrite(V73, tempBME);
+          //bridge1.virtualWrite(V63, abshumBME);
+          bridge2.virtualWrite(V62, tempBME);
+          bridge2.virtualWrite(V63, abshumBME);
+          bridge2.virtualWrite(V64, windchill);
+          bridge2.virtualWrite(V65, humidex);
+          bridge2.virtualWrite(V66, massConcentrationPm2p5);
+          
+          bridge3.virtualWrite(V61, tempPool);
+          bridge4.virtualWrite(V61, tempPool);
+          bridge4.virtualWrite(V62, tempBME);
+          bridge4.virtualWrite(V63, humBME);
+          bridge3.virtualWrite(V62, tempBME);
+          bridge3.virtualWrite(V63, dewpoint);
+          bridge3.virtualWrite(V64, windchill);
+          bridge3.virtualWrite(V65, humidex);
+          bridge3.virtualWrite(V66, windgust);
+          bridge3.virtualWrite(V67, massConcentrationPm2p5);
+          bridge3.virtualWrite(V68, windbridgedata);
+          bridge3.virtualWrite(V69, winddir); 
         }
-        Blynk.virtualWrite(V5, pm1Avg.mean());
-        Blynk.virtualWrite(V6, pm25Avg.mean());
-        
-        //bridge1.virtualWrite(V71, pm25Avg.mean());
-        //bridge1.virtualWrite(V72, bridgedata);
-        //bridge1.virtualWrite(V73, bridgetemp);
-        bridge1.virtualWrite(V74, co2SCD);
+        if (tempPool > 0) {Blynk.virtualWrite(V5, tempPool);}
+        Blynk.virtualWrite(V6, tempBME);
 
-        bridge2.virtualWrite(V71, pm25Avg.mean());
-        bridge2.virtualWrite(V72, tempSHT);
-        bridge2.virtualWrite(V73, humSHT);
-        bridge2.virtualWrite(V74, abshumSHT);
-        bridge2.virtualWrite(V75, voc_index);
-        bridge2.virtualWrite(V76, presBME);
-        bridge2.virtualWrite(V77, co2SCD);
-        bridge2.virtualWrite(V78, inetwind);
-        bridge2.virtualWrite(V79, inetgust);
-        bridge3.virtualWrite(V71, pm25Avg.mean());
-        bridge3.virtualWrite(V77, co2SCD);
-        bridge3.virtualWrite(V78, inetwind);
-        bridge3.virtualWrite(V79, inetgust);
-        Blynk.virtualWrite(V7, pm10Avg.mean());
-        Blynk.virtualWrite(V8, up3);
-        Blynk.virtualWrite(V9, up5);
-        Blynk.virtualWrite(V10, up10);
-        Blynk.virtualWrite(V11, up25);
-        Blynk.virtualWrite(V12, up50);
-        Blynk.virtualWrite(V13, up100);
-        Blynk.virtualWrite(V17, pm1aAvg.mean());
-        Blynk.virtualWrite(V18, pm25aAvg.mean());
-        Blynk.virtualWrite(V19, pm10aAvg.mean());
-        Blynk.virtualWrite(V23, bmeiaq);
-        Blynk.virtualWrite(V24, bmeiaqAccuracy);
-        Blynk.virtualWrite(V25, bmestaticIaq);
-        Blynk.virtualWrite(V26, bmeco2Equivalent);
-        Blynk.virtualWrite(V27, bmebreathVocEquivalent);
-        Blynk.virtualWrite(V28, bmestabStatus);
-        Blynk.virtualWrite(V29, bmerunInStatus);
-        Blynk.virtualWrite(V30, bmegasPercentage);
+        Blynk.virtualWrite(V31, wifiAvg.mean());
+        if ((windbridgedata == 0) && (winddir == 0)) {}
+         else {
+          Blynk.virtualWrite(V32, windchill);
+          Blynk.virtualWrite(V33, windDirection(winddir));
+        }
+        if (bridgedata > 0) {Blynk.virtualWrite(V53, bridgedata);
+        bridge1.virtualWrite(V61, massConcentrationPm2p5);}
+        Blynk.virtualWrite(V35, als);
+        Blynk.virtualWrite(V36, prox);
+        Blynk.virtualWrite(V37, ir);  
+        Blynk.virtualWrite(V38, luxrange);
 
-        Blynk.virtualWrite(V33, gasBME);
-        Blynk.virtualWrite(V34, wifiAvg.mean());
-        //if (!buttonpressed){
-        Blynk.virtualWrite(V36, tempSHT);
-        Blynk.virtualWrite(V37, humSHT);
-        Blynk.virtualWrite(V38, abshumSHT);
-        Blynk.virtualWrite(V39, humidexSHT);
-        Blynk.virtualWrite(V41, dewpointSHT);
-        //}
-        Blynk.virtualWrite(V42, tempSCD);
-        Blynk.virtualWrite(V43, humSCD);
-        Blynk.virtualWrite(V45, co2SCD);
-        Blynk.virtualWrite(V46, abshumSCD);
-        Blynk.virtualWrite(V47, batteryVolts);
-        Blynk.virtualWrite(V71, srawVoc);
-        Blynk.virtualWrite(V72, srawNox);
-        Blynk.virtualWrite(V73, voc_index);
-        Blynk.virtualWrite(V74, nox_index);
-        movingsignal /= sensorcount;
-        movingdistance /= sensorcount;
-        stasignal /= sensorcount;
-        stadistance /= sensorcount;
-        Blynk.virtualWrite(V81, movingsignal);
-        Blynk.virtualWrite(V82, movingdistance);
-        Blynk.virtualWrite(V83, stasignal);
-        Blynk.virtualWrite(V84, stadistance);
-        Blynk.virtualWrite(V85, sensorcount);
-        movingsignal = 0;
-        movingdistance = 0;
-        stasignal = 0;
-        stadistance = 0;
-        sensorcount = 0;
-
-        Blynk.virtualWrite(V86, lastReading);
+        //Blynk.virtualWrite(V41, adc0);
+        //Blynk.virtualWrite(V42, volts0);
+        //Blynk.virtualWrite(V43, tdsValue);
+        //Blynk.virtualWrite(V44, tdsuncompValue);
+        //Blynk.virtualWrite(V45, newTDS);
     }
-     ArduinoOTA.handle();
+
+  every(300000){
+    updateDisplay();
+  }
+
 }
